@@ -1,0 +1,183 @@
+:root {
+  --bg: #0d0d1a;
+  --bg-card: #161628;
+  --bg-card-light: #1e1e38;
+  --bg-hover: #252545;
+  --text: #e0e0e8;
+  --text-dim: #7a7a9a;
+  --accent: #6c63ff;
+  --accent-dim: #4a44bb;
+  --hp: #4ade80;
+  --hp-mid: #facc15;
+  --hp-low: #f87171;
+  --mp: #60a5fa;
+  --border: #2a2a4a;
+  --player: #3b82f6;
+  --enemy: #ef4444;
+  --success: #22c55e;
+  --warning: #eab308;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+#app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Scrollbar ──────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+/* ── Buttons ────────────────────────────────────────── */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+
+button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.btn {
+  background: var(--bg-card-light);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent-dim);
+}
+
+.btn-accent {
+  background: var(--accent);
+  color: #fff;
+}
+.btn-accent:hover:not(:disabled) {
+  background: var(--accent-dim);
+}
+
+.btn-attack { background: #dc2626; color: #fff; }
+.btn-attack:hover:not(:disabled) { background: #b91c1c; }
+.btn-defend { background: #2563eb; color: #fff; }
+.btn-defend:hover:not(:disabled) { background: #1d4ed8; }
+.btn-spell { background: #7c3aed; color: #fff; }
+.btn-spell:hover:not(:disabled) { background: #6d28d9; }
+.btn-item { background: #d97706; color: #fff; }
+.btn-item:hover:not(:disabled) { background: #b45309; }
+.btn-wait { background: #475569; color: #fff; }
+.btn-wait:hover:not(:disabled) { background: #334155; }
+.btn-flee { background: #78716c; color: #fff; }
+.btn-flee:hover:not(:disabled) { background: #57534e; }
+
+.btn-sm {
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
+/* ── HP / MP Bars ───────────────────────────────────── */
+.bar-container {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 3px 0;
+}
+.bar-label {
+  font-size: 12px;
+  font-weight: 700;
+  width: 26px;
+  text-align: right;
+}
+.bar-track {
+  flex: 1;
+  height: 14px;
+  background: #0a0a15;
+  border-radius: 7px;
+  overflow: hidden;
+  position: relative;
+}
+.bar-fill {
+  height: 100%;
+  border-radius: 7px;
+  transition: width 0.4s ease, background 0.4s ease;
+}
+.bar-value {
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 60px;
+  text-align: right;
+}
+
+/* ── Status Tags ────────────────────────────────────── */
+.status-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.status-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+}
+
+/* ── Animations ─────────────────────────────────────── */
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-4px); }
+  40% { transform: translateX(4px); }
+  60% { transform: translateX(-3px); }
+  80% { transform: translateX(2px); }
+}
+.shake {
+  animation: shake 0.4s ease;
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(108, 99, 255, 0); }
+  50% { box-shadow: 0 0 12px 2px rgba(108, 99, 255, 0.3); }
+}
+.your-turn-glow {
+  animation: pulse-glow 1.5s ease infinite;
+}
+
+@keyframes dot-bounce {
+  0%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-6px); }
+}
+.typing-dot {
+  display: inline-block;
+  animation: dot-bounce 1.2s ease infinite;
+}
+.typing-dot:nth-child(2) { animation-delay: 0.2s; }
+.typing-dot:nth-child(3) { animation-delay: 0.4s; }

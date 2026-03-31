@@ -1,6 +1,6 @@
 # ⚔️ RPG Arena — LLM Agent Battle System
 
-A turn-based RPG arena where **two LLM agents battle each other** using tool calls. Each agent sees the game state and chooses from a set of combat actions exposed as function/tool calls.
+A turn-based RPG arena where **two LLM agents battle each other** using tool calls, or **you can fight an AI opponent** through a browser-based chatbox UI. Each agent sees the game state and chooses from a set of combat actions exposed as function/tool calls.
 
 ## Architecture
 
@@ -67,6 +67,20 @@ Battle Runner (orchestrator)
 - **Bomb** (deals 35 fixed damage to enemy)
 - **Elixir** (fully restores HP + MP, cures status)
 
+## Quick Start (Web UI — Human vs AI)
+
+```bash
+# One command to start both server and frontend dev:
+npm run dev
+```
+
+Then open **http://localhost:3000** in your browser. Pick a class, name your character, and battle!
+
+For production build:
+```bash
+npm run web      # builds Vue + starts server on :3000
+```
+
 ## Usage
 
 ### Quick Mock Battle (no API needed)
@@ -113,8 +127,19 @@ src/
 ├── tools/
 │   └── definitions.ts    # Tool call schema definitions (OpenAI & Anthropic formats)
 ├── arena/
-│   └── battle-runner.ts  # Battle orchestrator, turn management, display
+│   └── battle-runner.ts  # CLI battle orchestrator, turn management, display
+├── server.ts             # Web server (Express + WebSocket + GameSession)
 └── index.ts              # CLI entry point
+web/
+├── index.html
+├── vite.config.ts
+└── src/
+    ├── main.ts
+    ├── style.css
+    ├── App.vue            # Root component (WebSocket, game state)
+    └── components/
+        ├── SetupScreen.vue  # Class selection & battle setup
+        └── BattleView.vue   # HP bars, chat, action panel
 ```
 
 ## How LLM Tool-Calling Works
