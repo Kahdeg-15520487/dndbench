@@ -196,9 +196,10 @@ export interface BattleLog {
 export interface AgentConfig {
   name: string;
   character: Character;
-  provider: "openai" | "anthropic" | "mock";
+  provider: "openai-compatible" | "mock";
   model: string;
   apiKey?: string;
+  baseURL?: string;
   systemPrompt?: string;
 }
 

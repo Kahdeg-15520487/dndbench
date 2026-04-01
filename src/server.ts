@@ -121,11 +121,11 @@ class GameSession {
     this.player = createCharacter("player", playerName, playerClass);
     this.enemy = createCharacter("enemy", "AI Opponent", enemyClass);
 
-    const provider = msg.enemyMode === "llm" ? "openai" : "mock";
+    const provider = msg.enemyMode === "llm" ? "openai-compatible" : "mock";
     this.llmAgent = new LLMAgent({
       name: "AI Opponent",
       character: this.enemy,
-      provider: provider as "openai" | "mock",
+      provider: provider as "openai-compatible" | "mock",
       model: "gpt-4o-mini",
     });
 

@@ -37,7 +37,6 @@ function parseArgs(args: string[]): CliOptions {
     agent2Class: "mage",
     agent2Name: "Beta",
     agent2Model: "gpt-4o-mini",
-    provider: "openai",
     mode: "mock",
     maxTurns: 30,
     delay: 1500,
@@ -53,7 +52,7 @@ function parseArgs(args: string[]): CliOptions {
       case "--a2-class": opts.agent2Class = args[++i]; break;
       case "--a2-name": opts.agent2Name = args[++i]; break;
       case "--a2-model": opts.agent2Model = args[++i]; break;
-      case "--provider": opts.provider = args[++i]; break;
+
       case "--mode": opts.mode = args[++i]; break;
       case "--max-turns": opts.maxTurns = parseInt(args[++i]); break;
       case "--delay": opts.delay = parseInt(args[++i]); break;
@@ -81,9 +80,8 @@ Options:
   --a2-class <class>    Agent 2 class (default: mage)
   --a2-name <name>      Agent 2 name (default: Beta)
   --a2-model <model>    Agent 2 LLM model (default: gpt-4o-mini)
-  --provider <provider> LLM provider: openai, mock (default: openai)
   --mode <mode>         Battle mode: llm, mock, mixed (default: mock)
-                        llm = both agents use LLM
+                        llm = both agents use OpenAI-compatible LLM
                         mock = both agents use heuristic AI
                         mixed = agent 1 = LLM, agent 2 = mock
   --max-turns <n>       Maximum turns before draw (default: 30)
@@ -96,8 +94,11 @@ Examples:
   # Quick mock battle
   npx tsx src/index.ts --mode mock --delay 500
 
-  # LLM vs LLM
-  npx tsx src/index.ts --mode llm --provider openai --a1-model gpt-4o-mini --a2-model gpt-4o
+  # LLM vs LLM (uses LLM_API_KEY / LLM_BASE_URL env vars)
+  npx tsx src/index.ts --mode llm --a1-model gpt-4o-mini --a2-model gpt-4o
+
+  # LLM vs LLM via Ollama
+  LLM_BASE_URL=http://localhost:11434/v1 npx tsx src/index.ts --mode llm --a1-model llama3 --a2-model mistral
 
   # Warrior vs Rogue, mock mode
   npx tsx src/index.ts --a1-class warrior --a2-class rogue --mode mock --delay 800
@@ -126,8 +127,8 @@ async function main() {
   const char2 = createCharacter("agent2", opts.agent2Name, opts.agent2Class as any);
 
   // Determine provider for each agent
-  const provider1 = opts.mode === "mock" ? "mock" as const : opts.provider as "openai";
-  const provider2 = opts.mode === "llm" ? opts.provider as "openai" : "mock" as const;
+  const provider1 = opts.mode === "mock" ? "mock" as const : "openai-compatible" as const;
+  const provider2 = opts.mode === "llm" ? "openai-compatible" as const : "mock" as const;
 
   // Create agents
   const agent1 = new LLMAgent({

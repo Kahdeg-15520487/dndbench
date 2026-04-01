@@ -2,6 +2,8 @@
 
 A turn-based RPG arena where **two LLM agents battle each other** using tool calls, or **you can fight an AI opponent** through a browser-based chatbox UI. Each agent sees the game state and chooses from a set of combat actions exposed as function/tool calls.
 
+Works with **any OpenAI-compatible API** — OpenAI, Ollama, LM Studio, Groq, Together, etc.
+
 ## Architecture
 
 ```
@@ -92,10 +94,20 @@ npx tsx src/index.ts --mode mock --delay 800
 
 ### LLM vs LLM Battle
 ```bash
-# Requires OPENAI_API_KEY in .env
-npm run battle:llm
-# or
-npx tsx src/index.ts --mode llm --provider openai --a1-model gpt-4o-mini --a2-model gpt-4o-mini
+# Set env vars (works with any OpenAI-compatible API)
+# See .env.example for provider-specific base URLs
+
+# OpenAI
+LLM_API_KEY=sk-... npx tsx src/index.ts --mode llm
+
+# Ollama (local, no key needed)
+LLM_BASE_URL=http://localhost:11434/v1 npx tsx src/index.ts --mode llm --a1-model llama3 --a2-model mistral
+
+# LM Studio (local)
+LLM_BASE_URL=http://localhost:1234/v1 npx tsx src/index.ts --mode llm
+
+# Groq
+LLM_API_KEY=gsk_... LLM_BASE_URL=https://api.groq.com/openai/v1 npx tsx src/index.ts --mode llm
 ```
 
 ### Mixed: LLM vs Mock AI
@@ -123,9 +135,9 @@ src/
 │   ├── combat.ts         # Core combat resolver (damage, spells, items, status)
 │   └── index.ts          # Engine exports
 ├── agent/
-│   └── llm-agent.ts      # LLM agent controller (OpenAI tool-calling)
+│   └── llm-agent.ts      # LLM agent controller (OpenAI-compatible tool-calling)
 ├── tools/
-│   └── definitions.ts    # Tool call schema definitions (OpenAI & Anthropic formats)
+│   └── definitions.ts    # Tool call schema definitions
 ├── arena/
 │   └── battle-runner.ts  # CLI battle orchestrator, turn management, display
 ├── server.ts             # Web server (Express + WebSocket + GameSession)
@@ -157,11 +169,15 @@ web/
 import { LLMAgent } from "./agent/llm-agent.js";
 import { createCharacter } from "./engine/characters.js";
 
+// Works with any OpenAI-compatible endpoint
 const agent = new LLMAgent({
   name: "MyFighter",
   character: createCharacter("my-id", "Fighter", "warrior"),
-  provider: "openai",
+  provider: "openai-compatible",
   model: "gpt-4o-mini",
+  // Or Ollama:
+  // baseURL: "http://localhost:11434/v1",
+  // apiKey: "not-needed",
   systemPrompt: "Play aggressively! Always attack when possible.",
 });
 ```

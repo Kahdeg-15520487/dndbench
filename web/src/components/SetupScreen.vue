@@ -112,7 +112,7 @@ function onStart() {
           </button>
         </div>
         <p class="hint">
-          {{ enemyMode === 'mock' ? 'Fast heuristic AI. No API key needed.' : 'Uses OpenAI API. Requires OPENAI_API_KEY on server.' }}
+          {{ enemyMode === 'mock' ? 'Fast heuristic AI. No API key needed.' : 'Uses OpenAI-compatible API (OpenAI, Ollama, LM Studio, Groq...). Requires LLM_API_KEY / LLM_BASE_URL on server.' }}
         </p>
       </div>
 

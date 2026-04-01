@@ -68,12 +68,12 @@ export class LLMAgent {
   constructor(config: AgentConfig) {
     this.config = config;
 
-    if (config.provider === "openai") {
+    if (config.provider === "openai-compatible") {
       this.client = new OpenAI({
-        apiKey: config.apiKey || process.env.OPENAI_API_KEY,
+        apiKey: config.apiKey || process.env.LLM_API_KEY || "sk-placeholder",
+        baseURL: config.baseURL || process.env.LLM_BASE_URL || "https://api.openai.com/v1",
       });
     }
-    // Add more providers as needed
   }
 
   /**
