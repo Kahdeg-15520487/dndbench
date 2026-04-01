@@ -1,121 +1,205 @@
 // ─────────────────────────────────────────────────────────
-//  LLM Agent — connects to OpenAI/Anthropic to make battle decisions
+//  LLM Agent — agentic loop with observe → think → act
+// ─────────────────────────────────────────────────────────
+//
+//  The LLM can call **observation tools** (inspect_enemy, review_spells,
+//  etc.) as many times as it wants before committing to an **action tool**.
+//  This gives the LLM a proper reasoning chain instead of a single shot.
+//
+//  Flow per turn:
+//    1. Engine calls getAction(state)
+//    2. Agent builds system prompt from state
+//    3. Agentic loop (up to MAX_ITERATIONS):
+//       a. Send messages + tools to LLM
+//       b. If observation tool call → execute, append result, continue
+//       c. If action tool call → convert to CombatAction, return it
+//       d. If no tool call → fallback to attack
+//    4. Return action to engine
 // ─────────────────────────────────────────────────────────
 
 import OpenAI from "openai";
+import { IAgent } from "./interface.js";
 import {
-  AgentConfig,
   BattleStateSnapshot,
   CombatAction,
-  ToolCall,
-  ToolDefinition,
+  CombatResult,
 } from "../engine/types.js";
-import { getOpenAITools } from "../tools/definitions.js";
+import { getAgenticTools } from "../tools/definitions.js";
 
-// ── System Prompt Builder ───────────────────────────────
+// ── Config ──────────────────────────────────────────────
 
-function buildSystemPrompt(
-  config: AgentConfig,
-  snapshot: BattleStateSnapshot
-): string {
-  const me = snapshot.characters.find((c) => c.id === config.character.id)!;
-  const enemy = snapshot.characters.find((c) => c.id !== config.character.id)!;
-
-  return `You are an RPG battle AI controlling ${me.name}, a skilled ${config.character.class}.
-Your opponent is ${enemy.name}.
-
-## YOUR CURRENT STATUS
-- HP: ${me.hp}/${me.maxHp} ${me.hp < me.maxHp * 0.3 ? "⚠️ LOW HP!" : ""}
-- MP: ${me.mp}/${me.maxMp}
-- Status Effects: ${me.statusEffects.length > 0 ? me.statusEffects.map((e) => e.type + ` (${e.turnsRemaining} turns)`).join(", ") : "None"}
-- Defending: ${me.isDefending}
-
-## AVAILABLE SPELLS
-${me.spells.map((s) => `- ${s.name} (id: ${s.id}): ${s.currentCooldown > 0 ? `⏳ Cooldown: ${s.currentCooldown} turns` : "Ready"} | Cost: variable MP`).join("\n")}
-
-## INVENTORY
-${me.inventory.length > 0 ? me.inventory.map((i) => `- ${i.name} (id: ${i.id}): ${i.quantity} remaining`).join("\n") : "No items remaining"}
-
-## ENEMY STATUS
-- ${enemy.name}: ${enemy.hp}/${enemy.maxHp} HP, ${enemy.mp}/${enemy.maxMp} MP
-- Enemy Status Effects: ${enemy.statusEffects.length > 0 ? enemy.statusEffects.map((e) => e.type).join(", ") : "None"}
-
-## STRATEGY GUIDELINES
-- If HP is low, consider healing or using Health Potions
-- If MP is low, consider using Wait or Mana Potions
-- Watch spell cooldowns — don't waste turns trying unavailable spells
-- Use status effects strategically (poison for attrition, freeze to deny turns)
-- Defend when you expect a big hit
-- Conserve your Elixir for critical moments
-- Be aggressive when the enemy is weak
-
-## RULES
-- Choose EXACTLY ONE action by calling the appropriate tool
-- Be strategic and unpredictable — don't always do the same thing
-- Respond with a tool call, not text
-
-${config.systemPrompt || ""}`;
+export interface LLMAgentConfig {
+  id: string;
+  name: string;
+  characterClass: string;
+  model: string;
+  apiKey?: string;
+  baseURL?: string;
+  systemPrompt?: string;
+  maxIterations?: number; // max tool-call rounds per turn (default: 5)
 }
 
-// ── OpenAI Agent ────────────────────────────────────────
+const DEFAULT_MAX_ITERATIONS = 5;
 
-export class LLMAgent {
-  private config: AgentConfig;
-  private client: OpenAI | null = null;
+// ── Observation Tool Handlers ───────────────────────────
+// These return text data to the LLM without consuming a turn.
+
+type ObservationHandler = (
+  args: Record<string, any>,
+  state: BattleStateSnapshot,
+  myId: string
+) => string;
+
+const observationHandlers: Record<string, ObservationHandler> = {
+  inspect_self(_args, state, myId) {
+    const me = state.characters.find((c) => c.id === myId)!;
+    return JSON.stringify({
+      name: me.name,
+      hp: `${me.hp}/${me.maxHp}`,
+      mp: `${me.mp}/${me.maxMp}`,
+      hpPercent: Math.round((me.hp / me.maxHp) * 100),
+      mpPercent: Math.round((me.mp / me.maxMp) * 100),
+      isDefending: me.isDefending,
+      statusEffects: me.statusEffects,
+    }, null, 2);
+  },
+
+  inspect_enemy(_args, state, myId) {
+    const enemy = state.characters.find((c) => c.id !== myId)!;
+    return JSON.stringify({
+      name: enemy.name,
+      hp: `${enemy.hp}/${enemy.maxHp}`,
+      mp: `${enemy.mp}/${enemy.maxMp}`,
+      hpPercent: Math.round((enemy.hp / enemy.maxHp) * 100),
+      statusEffects: enemy.statusEffects,
+      isDefending: enemy.isDefending,
+    }, null, 2);
+  },
+
+  review_spells(_args, state, myId) {
+    const me = state.characters.find((c) => c.id === myId)!;
+    return JSON.stringify(
+      me.spells.map((s) => ({
+        id: s.id,
+        name: s.name,
+        ready: s.currentCooldown === 0,
+        cooldownRemaining: s.currentCooldown,
+      })),
+      null,
+      2
+    );
+  },
+
+  review_inventory(_args, state, myId) {
+    const me = state.characters.find((c) => c.id === myId)!;
+    return JSON.stringify(
+      me.inventory.filter((i) => i.quantity > 0),
+      null,
+      2
+    );
+  },
+};
+
+// ── Agent Class ─────────────────────────────────────────
+
+export class LLMAgent implements IAgent {
+  readonly type = "llm" as const;
+
+  private config: LLMAgentConfig;
+  private client: OpenAI;
   private conversationHistory: OpenAI.Chat.ChatCompletionMessageParam[] = [];
   private turnCount = 0;
+  private maxIterations: number;
 
-  constructor(config: AgentConfig) {
+  constructor(config: LLMAgentConfig) {
     this.config = config;
+    this.maxIterations = config.maxIterations ?? DEFAULT_MAX_ITERATIONS;
 
-    if (config.provider === "openai-compatible") {
-      this.client = new OpenAI({
-        apiKey: config.apiKey || process.env.LLM_API_KEY || "sk-placeholder",
-        baseURL: config.baseURL || process.env.LLM_BASE_URL || "https://api.openai.com/v1",
-      });
-    }
+    this.client = new OpenAI({
+      apiKey: config.apiKey || process.env.LLM_API_KEY || "sk-placeholder",
+      baseURL: config.baseURL || process.env.LLM_BASE_URL || "https://api.openai.com/v1",
+    });
   }
 
-  /**
-   * Get the next action from the LLM
-   */
+  onBattleStart(state: BattleStateSnapshot): void {
+    // Fresh conversation for each battle
+    this.conversationHistory = [];
+    this.turnCount = 0;
+    const me = state.characters.find((c) => c.id === this.id)!;
+    const enemy = state.characters.find((c) => c.id !== this.id)!;
+
+    this.conversationHistory.push({
+      role: "system",
+      content: this.buildSystemPrompt(me, enemy),
+    });
+  }
+
   async getAction(snapshot: BattleStateSnapshot): Promise<CombatAction> {
     this.turnCount++;
 
-    if (this.config.provider === "mock") {
-      return this.getMockAction(snapshot);
-    }
+    const me = snapshot.characters.find((c) => c.id === this.id)!;
+    const enemy = snapshot.characters.find((c) => c.id !== this.id)!;
 
-    if (!this.client) {
-      throw new Error(`Provider ${this.config.provider} not configured`);
-    }
+    // Update system prompt with latest state
+    this.conversationHistory[0] = {
+      role: "system",
+      content: this.buildSystemPrompt(me, enemy),
+    };
 
-    const systemPrompt = buildSystemPrompt(this.config, snapshot);
-
-    // Reset conversation every 5 turns to avoid context bloat
-    if (this.turnCount % 5 === 1) {
-      this.conversationHistory = [
-        { role: "system", content: systemPrompt },
-      ];
-    } else {
-      this.conversationHistory[0] = { role: "system", content: systemPrompt };
-    }
-
-    // Add the current state as user message
+    // Prompt the LLM to think
     this.conversationHistory.push({
       role: "user",
-      content: `Turn ${snapshot.turnNumber}. What is your action?`,
+      content: `Turn ${snapshot.turnNumber}. Analyze the situation and choose your action. You may inspect the battlefield first, then commit to an action.`,
     });
 
     try {
-      const tools = getOpenAITools();
+      return await this.agenticLoop(snapshot);
+    } catch (error: any) {
+      console.error(
+        `[${this.name}] Agentic loop error: ${error.message}. Defaulting to attack.`
+      );
+      return {
+        type: "attack",
+        actorId: this.id,
+        targetId: enemy.id,
+      };
+    }
+  }
+
+  onActionResult(result: CombatResult): void {
+    // Add the narrative to conversation so the LLM remembers what happened
+    this.conversationHistory.push({
+      role: "user",
+      content: `Last action result: ${result.narrative}`,
+    });
+  }
+
+  onBattleEnd(winner: string | undefined, reason: string): void {
+    const won = winner === this.id;
+    this.conversationHistory.push({
+      role: "user",
+      content: `Battle over! ${reason}. ${won ? "You won!" : "You lost."}`,
+    });
+  }
+
+  destroy(): void {
+    this.conversationHistory = [];
+  }
+
+  // ── Agentic Loop ────────────────────────────────────
+
+  private async agenticLoop(snapshot: BattleStateSnapshot): Promise<CombatAction> {
+    const tools = getAgenticTools();
+    const enemyId = snapshot.characters.find((c) => c.id !== this.id)!.id;
+
+    for (let i = 0; i < this.maxIterations; i++) {
       const response = await this.client.chat.completions.create({
         model: this.config.model,
         messages: this.conversationHistory,
         tools,
         tool_choice: "auto",
-        temperature: 0.8, // some creativity
-        max_tokens: 200,
+        temperature: 0.8,
+        max_tokens: 300,
       });
 
       const message = response.choices[0]?.message;
@@ -123,150 +207,116 @@ export class LLMAgent {
 
       this.conversationHistory.push(message);
 
-      // Extract tool call
-      if (message.tool_calls && message.tool_calls.length > 0) {
-        const toolCall = message.tool_calls[0];
-        const args = JSON.parse(toolCall.function.arguments || "{}");
-        return this.toolCallToAction(
-          toolCall.function.name,
-          args,
-          snapshot
-        );
+      if (!message.tool_calls || message.tool_calls.length === 0) {
+        // No tool call — LLM just talked. Prompt again.
+        this.conversationHistory.push({
+          role: "user",
+          content: "Please use one of the available tools to take your action.",
+        });
+        continue;
       }
 
-      // Fallback: if no tool call, default to attack
-      console.warn(
-        `[${this.config.name}] No tool call received, defaulting to attack`
-      );
-      return {
-        type: "attack",
-        actorId: this.config.character.id,
-        targetId: this.getEnemyId(snapshot),
-      };
-    } catch (error: any) {
-      console.error(
-        `[${this.config.name}] LLM error: ${error.message}. Defaulting to attack.`
-      );
-      return {
-        type: "attack",
-        actorId: this.config.character.id,
-        targetId: this.getEnemyId(snapshot),
-      };
+      // Process all tool calls in this round
+      for (const toolCall of message.tool_calls) {
+        const toolName = toolCall.function.name;
+        const args = JSON.parse(toolCall.function.arguments || "{}");
+
+        // Is it an observation tool?
+        if (toolName in observationHandlers) {
+          const result = observationHandlers[toolName](args, snapshot, this.id);
+          this.conversationHistory.push({
+            role: "tool",
+            content: result,
+            tool_call_id: toolCall.id,
+          });
+          // Continue the loop — LLM can observe more or commit to action
+          continue;
+        }
+
+        // It's an action tool — commit and return
+        this.conversationHistory.push({
+          role: "tool",
+          content: `Action committed: ${toolName}`,
+          tool_call_id: toolCall.id,
+        });
+
+        return this.toolCallToAction(toolName, args, enemyId);
+      }
     }
+
+    // Max iterations reached — fallback to attack
+    console.warn(
+      `[${this.name}] Max iterations (${this.maxIterations}) reached. Defaulting to attack.`
+    );
+    return { type: "attack", actorId: this.id, targetId: enemyId };
   }
 
-  /**
-   * Add the result of the last action to conversation history
-   */
-  addResult(narrative: string): void {
-    this.conversationHistory.push({
-      role: "tool",
-      content: narrative,
-      tool_call_id: "result",
-    } as any);
+  // ── System Prompt ───────────────────────────────────
+
+  private buildSystemPrompt(
+    me: BattleStateSnapshot["characters"][0],
+    enemy: BattleStateSnapshot["characters"][0]
+  ): string {
+    return `You are an expert RPG battle AI controlling ${me.name} (${this.config.characterClass}).
+Your opponent is ${enemy.name}.
+
+## BATTLE STATE
+Your HP: ${me.hp}/${me.maxHp} (${Math.round((me.hp / me.maxHp) * 100)}%) ${me.hp < me.maxHp * 0.3 ? "⚠️ CRITICAL!" : ""}
+Your MP: ${me.mp}/${me.maxMp}
+Your Status: ${me.statusEffects.length > 0 ? me.statusEffects.map((e) => `${e.type} (${e.turnsRemaining}t)`).join(", ") : "None"}
+Enemy HP: ${enemy.hp}/${enemy.maxHp} (${Math.round((enemy.hp / enemy.maxHp) * 100)}%)
+Enemy Status: ${enemy.statusEffects.length > 0 ? enemy.statusEffects.map((e) => `${e.type} (${e.turnsRemaining}t)`).join(", ") : "None"}
+
+## AVAILABLE TOOLS
+You have TWO kinds of tools:
+
+1. OBSERVATION TOOLS (free — call as many as you want before acting):
+   - inspect_self: Your detailed stats (HP, MP, status effects)
+   - inspect_enemy: Enemy's detailed stats
+   - review_spells: Your spells with cooldown status
+   - review_inventory: Your usable items with quantities
+
+2. ACTION TOOLS (commits your turn — call EXACTLY ONE):
+   - attack, defend, cast_spell, use_item, wait, flee
+
+## STRATEGY
+- Use observation tools first to assess the situation
+- If HP is low, heal or defend
+- If MP is low, wait or use mana potions
+- Watch spell cooldowns — don't try unavailable spells
+- Use status effects strategically (poison for attrition, freeze to deny turns)
+- Be unpredictable — don't always do the same thing
+
+${this.config.systemPrompt || ""}`;
   }
 
-  // ── Helpers ─────────────────────────────────────────
-
-  private getEnemyId(snapshot: BattleStateSnapshot): string {
-    return snapshot.characters.find(
-      (c) => c.id !== this.config.character.id
-    )!.id;
-  }
+  // ── Tool Call → Action ──────────────────────────────
 
   private toolCallToAction(
     toolName: string,
     args: Record<string, any>,
-    snapshot: BattleStateSnapshot
+    enemyId: string
   ): CombatAction {
-    const actorId = this.config.character.id;
-    const targetId = this.getEnemyId(snapshot);
-
     switch (toolName) {
       case "attack":
-        return { type: "attack", actorId, targetId };
+        return { type: "attack", actorId: this.id, targetId: enemyId };
       case "defend":
-        return { type: "defend", actorId };
+        return { type: "defend", actorId: this.id };
       case "cast_spell":
         return {
           type: "cast_spell",
-          actorId,
-          targetId: args.target === "self" ? actorId : targetId,
+          actorId: this.id,
+          targetId: args.target === "self" ? this.id : enemyId,
           spellId: args.spell_id,
         };
       case "use_item":
-        return {
-          type: "use_item",
-          actorId,
-          itemId: args.item_id,
-        };
+        return { type: "use_item", actorId: this.id, itemId: args.item_id };
       case "wait":
-        return { type: "wait", actorId };
+        return { type: "wait", actorId: this.id };
       case "flee":
-        return { type: "flee", actorId };
+        return { type: "flee", actorId: this.id };
       default:
-        return { type: "attack", actorId, targetId };
+        return { type: "attack", actorId: this.id, targetId: enemyId };
     }
-  }
-
-  /**
-   * Simple mock agent for testing (no LLM API needed)
-   */
-  private getMockAction(snapshot: BattleStateSnapshot): CombatAction {
-    const me = snapshot.characters.find(
-      (c) => c.id === this.config.character.id
-    )!;
-    const enemy = snapshot.characters.find(
-      (c) => c.id !== this.config.character.id
-    )!;
-    const actorId = this.config.character.id;
-
-    // Simple heuristic AI
-    if (me.hp < me.maxHp * 0.3) {
-      // Low HP — heal
-      const healSpell = me.spells.find(
-        (s) => s.id === "heal" && s.currentCooldown === 0
-      );
-      if (healSpell && me.mp >= 15) {
-        return { type: "cast_spell", actorId, targetId: actorId, spellId: "heal" };
-      }
-      const potion = me.inventory.find(
-        (i) => i.id === "health_potion" && i.quantity > 0
-      );
-      if (potion) {
-        return { type: "use_item", actorId, itemId: "health_potion" };
-      }
-    }
-
-    // Use bomb if enemy is high HP
-    const bomb = me.inventory.find((i) => i.id === "bomb" && i.quantity > 0);
-    if (bomb && enemy.hp > enemy.maxHp * 0.5 && Math.random() > 0.6) {
-      return { type: "use_item", actorId, itemId: "bomb" };
-    }
-
-    // Cast a damage spell
-    const dmgSpells = me.spells.filter(
-      (s) =>
-        (s.type === "damage" || s.type === "drain") &&
-        s.currentCooldown === 0 &&
-        me.mp >= s.mpCost
-    );
-    if (dmgSpells.length > 0 && Math.random() > 0.3) {
-      const spell = dmgSpells[Math.floor(Math.random() * dmgSpells.length)];
-      return {
-        type: "cast_spell",
-        actorId,
-        targetId: enemy.id,
-        spellId: spell.id,
-      };
-    }
-
-    // Defend sometimes
-    if (Math.random() > 0.8) {
-      return { type: "defend", actorId };
-    }
-
-    // Default: attack
-    return { type: "attack", actorId, targetId: enemy.id };
   }
 }

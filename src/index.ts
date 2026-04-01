@@ -4,8 +4,9 @@
 // ─────────────────────────────────────────────────────────
 
 import { createCharacter } from "./engine/characters.js";
-import { LLMAgent } from "./agent/llm-agent.js";
-import { BattleRunner, BattleConfig } from "./arena/battle-runner.js";
+import { HeuristicAgent, LLMAgent } from "./agent/index.js";
+import type { IAgent } from "./agent/index.js";
+import { BattleRunner } from "./arena/battle-runner.js";
 import chalk from "chalk";
 import fs from "fs";
 import path from "path";
@@ -21,8 +22,7 @@ interface CliOptions {
   agent2Class: string;
   agent2Name: string;
   agent2Model: string;
-  provider: string;
-  mode: string; // "llm" | "mock" | "mixed"
+  mode: string; // "llm" | "mock" | "mixed" | "human"
   maxTurns: number;
   delay: number;
   outputFile?: string;
@@ -52,7 +52,6 @@ function parseArgs(args: string[]): CliOptions {
       case "--a2-class": opts.agent2Class = args[++i]; break;
       case "--a2-name": opts.agent2Name = args[++i]; break;
       case "--a2-model": opts.agent2Model = args[++i]; break;
-
       case "--mode": opts.mode = args[++i]; break;
       case "--max-turns": opts.maxTurns = parseInt(args[++i]); break;
       case "--delay": opts.delay = parseInt(args[++i]); break;
@@ -73,6 +72,11 @@ function printHelp(): void {
 
 Usage: npx tsx src/index.ts [options]
 
+Agent Types:
+  --mode mock      Both agents use heuristic AI (default)
+  --mode llm       Both agents use OpenAI-compatible LLM
+  --mode mixed     Agent 1 = LLM, Agent 2 = heuristic
+
 Options:
   --a1-class <class>    Agent 1 class: warrior, mage, rogue, paladin (default: warrior)
   --a1-name <name>      Agent 1 name (default: Alpha)
@@ -80,35 +84,53 @@ Options:
   --a2-class <class>    Agent 2 class (default: mage)
   --a2-name <name>      Agent 2 name (default: Beta)
   --a2-model <model>    Agent 2 LLM model (default: gpt-4o-mini)
-  --mode <mode>         Battle mode: llm, mock, mixed (default: mock)
-                        llm = both agents use OpenAI-compatible LLM
-                        mock = both agents use heuristic AI
-                        mixed = agent 1 = LLM, agent 2 = mock
+  --mode <mode>         Battle mode (default: mock)
   --max-turns <n>       Maximum turns before draw (default: 30)
   --delay <ms>          Delay between turns in ms (default: 1500)
   --output, -o <file>   Save battle log to JSON file
   --quiet               Suppress battle output
   --help, -h            Show this help
 
+Environment:
+  LLM_API_KEY    API key (not needed for local providers like Ollama)
+  LLM_BASE_URL   Base URL (default: https://api.openai.com/v1)
+
 Examples:
   # Quick mock battle
   npx tsx src/index.ts --mode mock --delay 500
 
-  # LLM vs LLM (uses LLM_API_KEY / LLM_BASE_URL env vars)
+  # LLM vs LLM
   npx tsx src/index.ts --mode llm --a1-model gpt-4o-mini --a2-model gpt-4o
 
-  # LLM vs LLM via Ollama
+  # LLM vs LLM via Ollama (local)
   LLM_BASE_URL=http://localhost:11434/v1 npx tsx src/index.ts --mode llm --a1-model llama3 --a2-model mistral
 
-  # Warrior vs Rogue, mock mode
-  npx tsx src/index.ts --a1-class warrior --a2-class rogue --mode mock --delay 800
-
-  # Mixed: LLM agent vs mock AI
+  # Mixed: LLM agent vs heuristic AI
   npx tsx src/index.ts --mode mixed --a1-model gpt-4o-mini
 
   # Save battle log
   npx tsx src/index.ts --mode mock -o battle-log.json
 `));
+}
+
+// ── Agent Factory ───────────────────────────────────────
+
+function createAgent(
+  mode: "llm" | "mock",
+  charId: string,
+  charName: string,
+  charClass: string,
+  model: string
+): IAgent {
+  if (mode === "llm") {
+    return new LLMAgent({
+      id: charId,
+      name: charName,
+      characterClass: charClass,
+      model,
+    });
+  }
+  return new HeuristicAgent(charId, charName);
 }
 
 // ── Main ────────────────────────────────────────────────
@@ -126,35 +148,19 @@ async function main() {
   const char1 = createCharacter("agent1", opts.agent1Name, opts.agent1Class as any);
   const char2 = createCharacter("agent2", opts.agent2Name, opts.agent2Class as any);
 
-  // Determine provider for each agent
-  const provider1 = opts.mode === "mock" ? "mock" as const : "openai-compatible" as const;
-  const provider2 = opts.mode === "llm" ? "openai-compatible" as const : "mock" as const;
+  // Create agents based on mode
+  const agent1Mode = opts.mode === "mock" ? "mock" : "llm";
+  const agent2Mode = opts.mode === "llm" ? "llm" : "mock";
 
-  // Create agents
-  const agent1 = new LLMAgent({
-    name: opts.agent1Name,
-    character: char1,
-    provider: provider1,
-    model: opts.agent1Model,
-  });
-
-  const agent2 = new LLMAgent({
-    name: opts.agent2Name,
-    character: char2,
-    provider: provider2,
-    model: opts.agent2Model,
-  });
+  const agent1 = createAgent(agent1Mode, char1.id, char1.name, char1.class, opts.agent1Model);
+  const agent2 = createAgent(agent2Mode, char2.id, char2.name, char2.class, opts.agent2Model);
 
   // Create battle runner
-  const runner = new BattleRunner(
-    [char1, char2],
-    [agent1, agent2],
-    {
-      maxTurns: opts.maxTurns,
-      turnDelayMs: opts.delay,
-      verbose: opts.verbose,
-    }
-  );
+  const runner = new BattleRunner([char1, char2], [agent1, agent2], {
+    maxTurns: opts.maxTurns,
+    turnDelayMs: opts.delay,
+    verbose: opts.verbose,
+  });
 
   // Run the battle
   const log = await runner.run();

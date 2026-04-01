@@ -189,20 +189,6 @@ export interface BattleLog {
   endTime?: string;
 }
 
-// ─────────────────────────────────────────────────────────
-//  Agent Types
-// ─────────────────────────────────────────────────────────
-
-export interface AgentConfig {
-  name: string;
-  character: Character;
-  provider: "openai-compatible" | "mock";
-  model: string;
-  apiKey?: string;
-  baseURL?: string;
-  systemPrompt?: string;
-}
-
 export interface ToolDefinition {
   name: string;
   description: string;
@@ -212,9 +198,4 @@ export interface ToolDefinition {
     enum?: string[];
     required?: boolean;
   }>;
-}
-
-export interface ToolCall {
-  name: string;
-  arguments: Record<string, unknown>;
 }

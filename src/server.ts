@@ -17,13 +17,14 @@ import {
   createSnapshot,
   determineTurnOrder,
 } from "./engine/index.js";
-import { LLMAgent } from "./agent/llm-agent.js";
+import { IAgent, HeuristicAgent, LLMAgent, HumanAgent } from "./agent/index.js";
 import type {
   Character,
   CharacterClass,
   CombatAction,
   BattleStateSnapshot,
   BattlePhase,
+  CombatResult,
 } from "./engine/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -35,7 +36,6 @@ const PORT = parseInt(process.env.PORT || "") || (isDev ? 3001 : 3000);
 const app = express();
 const server = createServer(app);
 
-// Serve built Vue frontend (production)
 const staticPath = path.join(__dirname, "../web/dist");
 if (fs.existsSync(staticPath)) {
   app.use(express.static(staticPath));
@@ -52,7 +52,7 @@ interface ClientMessage {
   type: "start_battle" | "action";
   name?: string;
   class?: string;
-  enemyMode?: string; // "mock" | "llm"
+  enemyMode?: string;
   action?: {
     type: string;
     spellId?: string;
@@ -61,19 +61,22 @@ interface ClientMessage {
   };
 }
 
-interface ServerMessage {
-  type: string;
-  [key: string]: unknown;
-}
-
+/**
+ * A single WebSocket connection = a single battle session.
+ *
+ * The GameSession creates a HumanAgent for the player and an
+ * IAgent (Heuristic or LLM) for the enemy, then drives the
+ * battle loop using the same engine the CLI uses.
+ */
 class GameSession {
   private ws: WebSocket;
   private player?: Character;
   private enemy?: Character;
-  private llmAgent?: LLMAgent;
+  private humanAgent?: HumanAgent;
+  private enemyAgent?: IAgent;
   private turnNumber = 0;
   private finished = false;
-  private turnOrder: "player_first" | "enemy_first" | null = null;
+  private battlePromise?: Promise<void>;
 
   constructor(ws: WebSocket) {
     this.ws = ws;
@@ -87,9 +90,7 @@ class GameSession {
           this.startBattle(msg);
           break;
         case "action":
-          if (!this.finished && this.player && this.enemy) {
-            this.handlePlayerAction(msg);
-          }
+          this.handleHumanAction(msg);
           break;
       }
     } catch (err: any) {
@@ -97,37 +98,26 @@ class GameSession {
     }
   }
 
-  // ── Start Battle ─────────────────────────────────────
+  // ── Start ───────────────────────────────────────────
 
   private startBattle(msg: ClientMessage) {
     const playerClass = (msg.class || "warrior") as CharacterClass;
-    const validClasses: CharacterClass[] = [
-      "warrior",
-      "mage",
-      "rogue",
-      "paladin",
-    ];
+    const validClasses: CharacterClass[] = ["warrior", "mage", "rogue", "paladin"];
     if (!validClasses.includes(playerClass)) {
       this.send("error", { message: "Invalid class" });
       return;
     }
 
-    // Enemy gets a random different class
     const otherClasses = validClasses.filter((c) => c !== playerClass);
-    const enemyClass =
-      otherClasses[Math.floor(Math.random() * otherClasses.length)];
-
+    const enemyClass = otherClasses[Math.floor(Math.random() * otherClasses.length)];
     const playerName = msg.name?.trim() || "Hero";
+
     this.player = createCharacter("player", playerName, playerClass);
     this.enemy = createCharacter("enemy", "AI Opponent", enemyClass);
 
-    const provider = msg.enemyMode === "llm" ? "openai-compatible" : "mock";
-    this.llmAgent = new LLMAgent({
-      name: "AI Opponent",
-      character: this.enemy,
-      provider: provider as "openai-compatible" | "mock",
-      model: "gpt-4o-mini",
-    });
+    // Create agents
+    this.humanAgent = new HumanAgent("player", playerName);
+    this.enemyAgent = this.createEnemyAgent(msg.enemyMode || "mock", enemyClass);
 
     this.turnNumber = 0;
     this.finished = false;
@@ -144,204 +134,155 @@ class GameSession {
       narrative: `⚔️ Battle begins! ${this.player.name} (${this.player.class}) vs ${this.enemy.name} (${this.enemy.class})`,
     });
 
-    // Start first turn
-    this.nextTurn();
+    // Run the battle loop
+    this.battlePromise = this.runBattleLoop();
   }
 
-  // ── Turn Management ──────────────────────────────────
-
-  private nextTurn() {
-    if (this.finished) return;
-    this.turnNumber++;
-
-    const order = determineTurnOrder([this.player!, this.enemy!]);
-    const playerFirst = order[0].id === this.player!.id;
-    this.turnOrder = playerFirst ? "player_first" : "enemy_first";
-
-    this.send("turn_start", {
-      turnNumber: this.turnNumber,
-      state: this.getState(),
-    });
-
-    if (playerFirst) {
-      this.sendPlayerTurn();
-    } else {
-      this.send("info", {
-        narrative: `⚡ ${this.enemy!.name} is faster and acts first!`,
-      });
-      this.executeEnemyTurn(() => {
-        if (!this.finished) this.sendPlayerTurn();
+  private createEnemyAgent(mode: string, charClass: CharacterClass): IAgent {
+    if (mode === "llm") {
+      return new LLMAgent({
+        id: "enemy",
+        name: "AI Opponent",
+        characterClass: charClass,
+        model: "gpt-4o-mini",
       });
     }
+    return new HeuristicAgent("enemy", "AI Opponent");
   }
 
-  private sendPlayerTurn() {
-    // Check freeze
-    if (this.hasStatus(this.player!, "freeze")) {
-      this.send("status", {
-        narrative: `❄️ You are frozen solid and cannot move!`,
-      });
-      this.tickAndProcess(this.player!);
-      if (this.checkBattleEnd()) return;
-      // Continue with the other phase
-      if (this.turnOrder === "player_first" && !this.finished) {
-        this.executeEnemyTurn(() => {
-          if (!this.finished) this.nextTurn();
-        });
-      } else {
-        if (!this.finished) this.nextTurn();
+  // ── Battle Loop ─────────────────────────────────────
+
+  private async runBattleLoop() {
+    try {
+      // Notify agents
+      const snapshot = this.getState();
+      this.humanAgent!.onBattleStart?.(snapshot);
+      this.enemyAgent!.onBattleStart?.(snapshot);
+
+      while (!this.finished && this.turnNumber < 50) {
+        this.turnNumber++;
+        const order = determineTurnOrder([this.player!, this.enemy!]);
+
+        for (const character of order) {
+          if (this.finished) break;
+
+          const isPlayer = character.id === "player";
+          const agent = isPlayer ? this.humanAgent! : this.enemyAgent!;
+          const target = isPlayer ? this.enemy! : this.player!;
+
+          this.send("turn_start", {
+            turnNumber: this.turnNumber,
+            state: this.getState(),
+          });
+
+          // Check freeze
+          if (character.statusEffects.some((e) => e.type === "freeze")) {
+            this.send("status", {
+              narrative: `❄️ ${character.name} is frozen and cannot act!`,
+            });
+            tickCooldowns(character);
+            continue;
+          }
+
+          // ── Ask agent for action (the unified interface) ──
+          if (isPlayer) {
+            // Tell the UI it's the human's turn
+            this.send("your_turn", {
+              state: this.getState(),
+              turnNumber: this.turnNumber,
+            });
+          } else {
+            this.send("enemy_thinking", { turnNumber: this.turnNumber });
+          }
+
+          const currentSnapshot = this.getState();
+          const action = await agent.getAction(currentSnapshot);
+
+          if (this.finished) break;
+
+          // Resolve
+          const result = resolveAction(character, target, action);
+
+          // Notify agents
+          this.humanAgent!.onActionResult?.(result);
+          this.enemyAgent!.onActionResult?.(result);
+
+          // Send result to UI
+          if (isPlayer) {
+            this.send("action_result", {
+              narrative: result.narrative,
+              result,
+              state: this.getState(),
+              turnNumber: this.turnNumber,
+            });
+          } else {
+            this.send("enemy_result", {
+              narrative: result.narrative,
+              result,
+              state: this.getState(),
+              turnNumber: this.turnNumber,
+            });
+          }
+
+          // Process status + cooldowns
+          tickCooldowns(character);
+          const pStatus = processStatusEffects(character);
+          const tStatus = processStatusEffects(target);
+          [...pStatus, ...tStatus].forEach((n) => this.send("status", { narrative: n }));
+
+          // Check flee
+          if (result.fledSuccessfully) {
+            this.endBattle(target.id, `${character.name} fled!`);
+            break;
+          }
+
+          // Check defeat
+          if (target.stats.hp <= 0) {
+            this.endBattle(character.id, `${target.name} has been defeated!`);
+            break;
+          }
+          if (character.stats.hp <= 0) {
+            this.endBattle(target.id, `${character.name} collapsed!`);
+            break;
+          }
+        }
       }
-      return;
-    }
 
-    this.send("your_turn", {
-      state: this.getState(),
-      turnNumber: this.turnNumber,
-    });
+      // Turn limit
+      if (!this.finished) {
+        this.endBattle(undefined, "Turn limit reached — it's a draw!");
+      }
+    } catch (err: any) {
+      console.error("Battle loop error:", err);
+      this.send("error", { message: `Battle error: ${err.message}` });
+    }
   }
 
-  // ── Player Action ────────────────────────────────────
+  // ── Human Input ─────────────────────────────────────
 
-  private handlePlayerAction(msg: ClientMessage) {
-    if (!msg.action) return;
+  private handleHumanAction(msg: ClientMessage) {
+    if (!msg.action || !this.humanAgent) return;
 
     const raw = msg.action;
     const action: CombatAction = {
       type: raw.type as CombatAction["type"],
-      actorId: this.player!.id,
-      targetId:
-        raw.target === "self" ? this.player!.id : this.enemy!.id,
+      actorId: "player",
+      targetId: raw.target === "self" ? "player" : "enemy",
       spellId: raw.spellId as any,
       itemId: raw.itemId as any,
     };
 
-    // Resolve player action
-    const result = resolveAction(this.player!, this.enemy!, action);
-    this.send("action_result", {
-      narrative: result.narrative,
-      result,
-      state: this.getState(),
-      turnNumber: this.turnNumber,
-    });
-
-    this.tickAndProcess(this.player!);
-    if (this.checkBattleEnd()) return;
-
-    // If player went first, enemy still needs to act
-    if (this.turnOrder === "player_first" && !this.finished) {
-      this.executeEnemyTurn(() => {
-        if (!this.finished) this.nextTurn();
-      });
-    } else {
-      // Turn complete
-      if (!this.finished) this.nextTurn();
-    }
+    // This resolves the Promise in HumanAgent.getAction()
+    this.humanAgent.submitAction(action);
   }
 
-  // ── Enemy Turn ───────────────────────────────────────
+  // ── Helpers ─────────────────────────────────────────
 
-  private executeEnemyTurn(callback: () => void) {
-    // Check freeze
-    if (this.hasStatus(this.enemy!, "freeze")) {
-      this.send("status", {
-        narrative: `❄️ ${this.enemy!.name} is frozen and cannot move!`,
-      });
-      this.tickAndProcess(this.enemy!);
-      if (this.checkBattleEnd()) return;
-      callback();
-      return;
-    }
-
-    this.send("enemy_thinking", { turnNumber: this.turnNumber });
-
-    const snapshot = this.getState();
-    this.llmAgent!
-      .getAction(snapshot)
-      .then((action) => {
-        if (this.finished) return;
-
-        const result = resolveAction(this.enemy!, this.player!, action);
-        this.tickAndProcess(this.enemy!);
-
-        this.send("enemy_result", {
-          narrative: result.narrative,
-          result,
-          state: this.getState(),
-          turnNumber: this.turnNumber,
-        });
-
-        this.checkBattleEnd();
-        callback();
-      })
-      .catch((err) => {
-        console.error("Enemy turn error:", err);
-        // Fallback: just attack
-        const result = resolveAction(this.enemy!, this.player!, {
-          type: "attack",
-          actorId: this.enemy!.id,
-          targetId: this.player!.id,
-        });
-        this.send("enemy_result", {
-          narrative: result.narrative,
-          result,
-          state: this.getState(),
-        });
-        this.checkBattleEnd();
-        callback();
-      });
-  }
-
-  // ── Helpers ──────────────────────────────────────────
-
-  private tickAndProcess(character: Character) {
-    tickCooldowns(character);
-    const narratives = processStatusEffects(character);
-    narratives.forEach((n) => {
-      this.send("status", { narrative: n });
-    });
-    // Also process status on the other character
-    const other =
-      character.id === this.player!.id ? this.enemy! : this.player!;
-    const otherN = processStatusEffects(other);
-    otherN.forEach((n) => {
-      this.send("status", { narrative: n });
-    });
-  }
-
-  private hasStatus(character: Character, type: string): boolean {
-    return character.statusEffects.some((e) => e.type === type);
-  }
-
-  private checkBattleEnd(): boolean {
-    if (this.player!.stats.hp <= 0) {
-      this.finished = true;
-      this.send("battle_end", {
-        winner: "enemy",
-        reason: `${this.player!.name} has been defeated!`,
-        state: this.getState(),
-      });
-      return true;
-    }
-    if (this.enemy!.stats.hp <= 0) {
-      this.finished = true;
-      this.send("battle_end", {
-        winner: "player",
-        reason: `${this.enemy!.name} has been defeated!`,
-        state: this.getState(),
-      });
-      return true;
-    }
-    // Turn limit
-    if (this.turnNumber >= 50) {
-      this.finished = true;
-      this.send("battle_end", {
-        winner: "draw",
-        reason: "Turn limit reached — it's a draw!",
-        state: this.getState(),
-      });
-      return true;
-    }
-    return false;
+  private endBattle(winner: string | undefined, reason: string) {
+    this.finished = true;
+    this.send("battle_end", { winner: winner || "draw", reason, state: this.getState() });
+    this.humanAgent?.onBattleEnd?.(winner, reason);
+    this.enemyAgent?.onBattleEnd?.(winner, reason);
   }
 
   private getState(): BattleStateSnapshot {
@@ -360,6 +301,8 @@ class GameSession {
 
   destroy() {
     this.finished = true;
+    this.humanAgent?.destroy();
+    this.enemyAgent?.destroy?.();
   }
 }
 
@@ -371,22 +314,14 @@ wss.on("connection", (ws) => {
   const session = new GameSession(ws);
   sessions.set(ws, session);
 
-  ws.on("message", (data) => {
-    session.handleMessage(data.toString());
-  });
+  ws.on("message", (data) => session.handleMessage(data.toString()));
 
   ws.on("close", () => {
     session.destroy();
     sessions.delete(ws);
   });
 
-  // Send welcome
-  ws.send(
-    JSON.stringify({
-      type: "connected",
-      message: "Connected to RPG Arena!",
-    })
-  );
+  ws.send(JSON.stringify({ type: "connected", message: "Connected to RPG Arena!" }));
 });
 
 // ── Start ───────────────────────────────────────────────
