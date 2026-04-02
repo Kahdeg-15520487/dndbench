@@ -1,0 +1,16 @@
+version: "3.8"
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: arena01-db
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: arena
+      POSTGRES_PASSWORD: arena
+      POSTGRES_DB: arena01
+    volumes:
+      - arena01-pgdata:/var/lib/postgresql/data
+
+volumes:
+  arena01-pgdata:

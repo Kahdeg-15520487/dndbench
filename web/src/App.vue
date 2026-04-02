@@ -182,12 +182,13 @@ function addMessage(type: ChatMessage["type"], text: string) {
 
 // ── Actions ──────────────────────────────────────────────
 
-function startBattle(config: { name: string; charClass: string; enemyMode: string }) {
+function startBattle(config: { name: string; charClass: string; enemyMode: string; llmConfigId?: number }) {
   send({
     type: "start_battle",
     name: config.name,
     class: config.charClass,
     enemyMode: config.enemyMode,
+    llmConfigId: config.llmConfigId,
   });
 }
 

@@ -1,5 +1,5 @@
 // ─────────────────────────────────────────────────────────
-//  Web Game Server — Express + WebSocket
+//  Web Game Server — Express + WebSocket + PostgreSQL
 // ─────────────────────────────────────────────────────────
 
 import express from "express";
@@ -23,9 +23,9 @@ import type {
   CharacterClass,
   CombatAction,
   BattleStateSnapshot,
-  BattlePhase,
   CombatResult,
 } from "./engine/types.js";
+import * as db from "./db/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = process.env.NODE_ENV !== "production";
@@ -34,7 +34,104 @@ const PORT = parseInt(process.env.PORT || "") || (isDev ? 3001 : 3000);
 // ── Express ─────────────────────────────────────────────
 
 const app = express();
+app.use(express.json());
+
 const server = createServer(app);
+
+// ── REST API: LLM Configs ───────────────────────────────
+
+// List all configs
+app.get("/api/llm-configs", async (_req, res) => {
+  try {
+    const configs = await db.listLLMConfigs();
+    // Mask API keys for listing
+    res.json(configs.map(c => ({
+      ...c,
+      apiKey: c.apiKey ? "••••" + c.apiKey.slice(-4) : null,
+    })));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get single config (includes full API key — needed to create LLM agent)
+app.get("/api/llm-configs/:id", async (req, res) => {
+  try {
+    const config = await db.getLLMConfig(parseInt(req.params.id));
+    if (!config) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    // Mask API key here too — server reads it internally
+    res.json({
+      ...config,
+      apiKey: config.apiKey ? "••••" + config.apiKey.slice(-4) : null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create config
+app.post("/api/llm-configs", async (req, res) => {
+  try {
+    const config = await db.createLLMConfig(req.body);
+    res.status(201).json({
+      ...config,
+      apiKey: config.apiKey ? "••••" + config.apiKey.slice(-4) : null,
+    });
+  } catch (err: any) {
+    if (err.code === "23505") {
+      res.status(409).json({ error: `Config "${req.body.name}" already exists` });
+      return;
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update config
+app.patch("/api/llm-configs/:id", async (req, res) => {
+  try {
+    const config = await db.updateLLMConfig(parseInt(req.params.id), req.body);
+    if (!config) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    res.json({
+      ...config,
+      apiKey: config.apiKey ? "••••" + config.apiKey.slice(-4) : null,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete config
+app.delete("/api/llm-configs/:id", async (req, res) => {
+  try {
+    const deleted = await db.deleteLLMConfig(parseInt(req.params.id));
+    if (!deleted) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── REST API: Battle Logs ───────────────────────────────
+
+app.get("/api/battle-logs", async (_req, res) => {
+  try {
+    const logs = await db.listBattleLogs();
+    res.json(logs);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Static Files (production) ───────────────────────────
 
 const staticPath = path.join(__dirname, "../web/dist");
 if (fs.existsSync(staticPath)) {
@@ -53,6 +150,7 @@ interface ClientMessage {
   name?: string;
   class?: string;
   enemyMode?: string;
+  llmConfigId?: number;
   action?: {
     type: string;
     spellId?: string;
@@ -63,10 +161,6 @@ interface ClientMessage {
 
 /**
  * A single WebSocket connection = a single battle session.
- *
- * The GameSession creates a HumanAgent for the player and an
- * IAgent (Heuristic or LLM) for the enemy, then drives the
- * battle loop using the same engine the CLI uses.
  */
 class GameSession {
   private ws: WebSocket;
@@ -76,7 +170,7 @@ class GameSession {
   private enemyAgent?: IAgent;
   private turnNumber = 0;
   private finished = false;
-  private battlePromise?: Promise<void>;
+  private startTime = 0;
 
   constructor(ws: WebSocket) {
     this.ws = ws;
@@ -100,7 +194,7 @@ class GameSession {
 
   // ── Start ───────────────────────────────────────────
 
-  private startBattle(msg: ClientMessage) {
+  private async startBattle(msg: ClientMessage) {
     const playerClass = (msg.class || "warrior") as CharacterClass;
     const validClasses: CharacterClass[] = ["warrior", "mage", "rogue", "paladin"];
     if (!validClasses.includes(playerClass)) {
@@ -117,10 +211,15 @@ class GameSession {
 
     // Create agents
     this.humanAgent = new HumanAgent("player", playerName);
-    this.enemyAgent = this.createEnemyAgent(msg.enemyMode || "mock", enemyClass);
+    this.enemyAgent = await this.createEnemyAgent(
+      msg.enemyMode || "mock",
+      enemyClass,
+      msg.llmConfigId
+    );
 
     this.turnNumber = 0;
     this.finished = false;
+    this.startTime = Date.now();
 
     this.send("battle_start", {
       playerId: this.player.id,
@@ -134,17 +233,32 @@ class GameSession {
       narrative: `⚔️ Battle begins! ${this.player.name} (${this.player.class}) vs ${this.enemy.name} (${this.enemy.class})`,
     });
 
-    // Run the battle loop
-    this.battlePromise = this.runBattleLoop();
+    this.runBattleLoop();
   }
 
-  private createEnemyAgent(mode: string, charClass: CharacterClass): IAgent {
+  private async createEnemyAgent(
+    mode: string,
+    charClass: CharacterClass,
+    llmConfigId?: number
+  ): Promise<IAgent> {
     if (mode === "llm") {
+      // Try to load config from DB
+      let config = llmConfigId
+        ? await db.getLLMConfig(llmConfigId)
+        : await db.getDefaultLLMConfig();
+
+      // Fallback to env vars or defaults
+      const model = config?.model || process.env.LLM_MODEL || "gpt-4o-mini";
+      const apiKey = config?.apiKey || process.env.LLM_API_KEY || "sk-placeholder";
+      const baseUrl = config?.baseUrl || process.env.LLM_BASE_URL || "https://api.openai.com/v1";
+
       return new LLMAgent({
         id: "enemy",
         name: "AI Opponent",
         characterClass: charClass,
-        model: "gpt-4o-mini",
+        model,
+        apiKey,
+        baseURL: baseUrl,
       });
     }
     return new HeuristicAgent("enemy", "AI Opponent");
@@ -154,7 +268,6 @@ class GameSession {
 
   private async runBattleLoop() {
     try {
-      // Notify agents
       const snapshot = this.getState();
       this.humanAgent!.onBattleStart?.(snapshot);
       this.enemyAgent!.onBattleStart?.(snapshot);
@@ -184,9 +297,8 @@ class GameSession {
             continue;
           }
 
-          // ── Ask agent for action (the unified interface) ──
+          // Ask agent for action
           if (isPlayer) {
-            // Tell the UI it's the human's turn
             this.send("your_turn", {
               state: this.getState(),
               turnNumber: this.turnNumber,
@@ -200,14 +312,11 @@ class GameSession {
 
           if (this.finished) break;
 
-          // Resolve
           const result = resolveAction(character, target, action);
 
-          // Notify agents
           this.humanAgent!.onActionResult?.(result);
           this.enemyAgent!.onActionResult?.(result);
 
-          // Send result to UI
           if (isPlayer) {
             this.send("action_result", {
               narrative: result.narrative,
@@ -224,19 +333,16 @@ class GameSession {
             });
           }
 
-          // Process status + cooldowns
           tickCooldowns(character);
           const pStatus = processStatusEffects(character);
           const tStatus = processStatusEffects(target);
           [...pStatus, ...tStatus].forEach((n) => this.send("status", { narrative: n }));
 
-          // Check flee
           if (result.fledSuccessfully) {
             this.endBattle(target.id, `${character.name} fled!`);
             break;
           }
 
-          // Check defeat
           if (target.stats.hp <= 0) {
             this.endBattle(character.id, `${target.name} has been defeated!`);
             break;
@@ -248,7 +354,6 @@ class GameSession {
         }
       }
 
-      // Turn limit
       if (!this.finished) {
         this.endBattle(undefined, "Turn limit reached — it's a draw!");
       }
@@ -272,7 +377,6 @@ class GameSession {
       itemId: raw.itemId as any,
     };
 
-    // This resolves the Promise in HumanAgent.getAction()
     this.humanAgent.submitAction(action);
   }
 
@@ -283,6 +387,18 @@ class GameSession {
     this.send("battle_end", { winner: winner || "draw", reason, state: this.getState() });
     this.humanAgent?.onBattleEnd?.(winner, reason);
     this.enemyAgent?.onBattleEnd?.(winner, reason);
+
+    // Save battle log to DB (fire-and-forget)
+    const durationMs = Date.now() - this.startTime;
+    db.saveBattleLog({
+      playerName: this.player?.name,
+      playerClass: this.player?.class,
+      enemyClass: this.enemy?.class,
+      enemyMode: this.enemyAgent?.type === "llm" ? "llm" : "mock",
+      winner: winner || undefined,
+      turns: this.turnNumber,
+      durationMs,
+    }).catch((err) => console.error("Failed to save battle log:", err.message));
   }
 
   private getState(): BattleStateSnapshot {
@@ -326,10 +442,21 @@ wss.on("connection", (ws) => {
 
 // ── Start ───────────────────────────────────────────────
 
-server.listen(PORT, () => {
-  console.log(
-    `\n⚔️  RPG Arena Server running on http://localhost:${PORT}` +
-      (isDev ? `\n   (Frontend dev server should be on http://localhost:3000)` : "") +
-      `\n`
-  );
+async function main() {
+  // Connect to DB and run migrations
+  console.log("Connecting to database...");
+  await db.migrate();
+
+  server.listen(PORT, () => {
+    console.log(
+      `\n⚔️  RPG Arena Server running on http://localhost:${PORT}` +
+        (isDev ? `\n   (Frontend dev server should be on http://localhost:3000)` : "") +
+        `\n`
+    );
+  });
+}
+
+main().catch((err) => {
+  console.error("Fatal:", err);
+  process.exit(1);
 });
