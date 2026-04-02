@@ -302,17 +302,26 @@ function statusLabel(type: string, turns: number): string {
 </template>
 
 <style scoped>
+/* ── Layout Principle ──────────────────────────────────
+   Header, status bars, and action panel are FIXED size.
+   Only the chat area stretches / scrolls.
+   This prevents layout shifts when content changes.
+   ─────────────────────────────────────────────────── */
+
 .arena {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh; /* mobile viewport */
   max-width: 600px;
   margin: 0 auto;
   padding: 0;
+  overflow: hidden;
 }
 
-/* ── Header ─────────────────────────────────────────── */
+/* ── Header — fixed ─────────────────────────────────── */
 .header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -333,22 +342,25 @@ function statusLabel(type: string, turns: number): string {
   border-radius: 20px;
 }
 
-/* ── Status Section ─────────────────────────────────── */
+/* ── Status Section — fixed height ──────────────────── */
 .status-section {
+  flex-shrink: 0;
   display: flex;
-  align-items: center;
+  align-items: stretch; /* both cards same height */
   gap: 8px;
-  padding: 12px 16px;
+  padding: 10px 16px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
 }
 .char-card {
   flex: 1;
   min-width: 0;
-  padding: 10px;
+  padding: 8px 10px;
   background: var(--bg);
   border-radius: 10px;
   border: 1px solid var(--border);
+  /* prevent content from resizing the card */
+  overflow: hidden;
 }
 .player-card.your-turn-glow {
   border-color: var(--accent);
@@ -357,28 +369,77 @@ function statusLabel(type: string, turns: number): string {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 .char-name {
   font-weight: 700;
-  font-size: 14px;
+  font-size: 13px;
 }
 .char-class {
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
+.bar-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+.bar-label {
+  font-size: 10px;
+  font-weight: 700;
+  width: 18px;
+  flex-shrink: 0;
+}
+.bar-track {
+  flex: 1;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.4s ease;
+}
+.bar-value {
+  font-size: 10px;
+  color: var(--text-dim);
+  width: 55px;
+  flex-shrink: 0;
+  text-align: right;
+}
+.status-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 3px;
+  min-height: 0; /* don't reserve space when empty */
+}
+.status-tag {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
 .vs-badge {
+  flex-shrink: 0;
+  align-self: center;
   font-weight: 900;
   font-size: 12px;
   color: var(--text-dim);
   text-shadow: 0 0 8px rgba(108, 99, 255, 0.3);
 }
 
-/* ── Chat Section ───────────────────────────────────── */
+/* ── Chat Section — ONLY section that scrolls ───────── */
 .chat-section {
   flex: 1;
+  min-height: 0; /* critical: allows flex child to shrink below content size */
   overflow-y: auto;
   padding: 12px 16px;
   display: flex;
@@ -439,11 +500,17 @@ function statusLabel(type: string, turns: number): string {
   font-style: italic;
 }
 
-/* ── Action Section ─────────────────────────────────── */
+/* ── Action Section — fixed height via min-height ───── */
 .action-section {
-  padding: 12px 16px 16px;
+  flex-shrink: 0;
+  padding: 10px 16px 14px;
   background: var(--bg-card);
   border-top: 1px solid var(--border);
+  /* fixed height prevents layout shift when switching panels */
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 .action-grid {
   display: grid;
