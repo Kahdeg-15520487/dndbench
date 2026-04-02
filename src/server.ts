@@ -1,6 +1,11 @@
 // ─────────────────────────────────────────────────────────
 //  Web Game Server — Express + WebSocket + PostgreSQL
 // ─────────────────────────────────────────────────────────
+//
+//  All battle logic lives in BattleRunner. This server is just
+//  a transport layer: WebSocket messages in → BattleRunner,
+//  BattleRunner events out → WebSocket messages to browser.
+// ─────────────────────────────────────────────────────────
 
 import express from "express";
 import { createServer } from "http";
@@ -10,21 +15,11 @@ import { fileURLToPath } from "url";
 import fs from "fs";
 
 import { createCharacter } from "./engine/characters.js";
-import {
-  resolveAction,
-  processStatusEffects,
-  tickCooldowns,
-  createSnapshot,
-  determineTurnOrder,
-} from "./engine/index.js";
 import { IAgent, HeuristicAgent, LLMAgent, HumanAgent } from "./agent/index.js";
-import type {
-  Character,
-  CharacterClass,
-  CombatAction,
-  BattleStateSnapshot,
-  CombatResult,
-} from "./engine/types.js";
+import type { Character, CharacterClass, CombatAction } from "./engine/types.js";
+import { BattleRunner } from "./arena/battle-runner.js";
+import { createWsRenderer } from "./arena/ws-renderer.js";
+import { saveReplay } from "./arena/replay.js";
 import * as db from "./db/index.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,11 +35,9 @@ const server = createServer(app);
 
 // ── REST API: LLM Configs ───────────────────────────────
 
-// List all configs
 app.get("/api/llm-configs", async (_req, res) => {
   try {
     const configs = await db.listLLMConfigs();
-    // Mask API keys for listing
     res.json(configs.map(c => ({
       ...c,
       apiKey: c.apiKey ? "••••" + c.apiKey.slice(-4) : null,
@@ -54,15 +47,10 @@ app.get("/api/llm-configs", async (_req, res) => {
   }
 });
 
-// Get single config (includes full API key — needed to create LLM agent)
 app.get("/api/llm-configs/:id", async (req, res) => {
   try {
     const config = await db.getLLMConfig(parseInt(req.params.id));
-    if (!config) {
-      res.status(404).json({ error: "Not found" });
-      return;
-    }
-    // Mask API key here too — server reads it internally
+    if (!config) { res.status(404).json({ error: "Not found" }); return; }
     res.json({
       ...config,
       apiKey: config.apiKey ? "••••" + config.apiKey.slice(-4) : null,
@@ -72,7 +60,6 @@ app.get("/api/llm-configs/:id", async (req, res) => {
   }
 });
 
-// Create config
 app.post("/api/llm-configs", async (req, res) => {
   try {
     const config = await db.createLLMConfig(req.body);
@@ -89,14 +76,10 @@ app.post("/api/llm-configs", async (req, res) => {
   }
 });
 
-// Update config
 app.patch("/api/llm-configs/:id", async (req, res) => {
   try {
     const config = await db.updateLLMConfig(parseInt(req.params.id), req.body);
-    if (!config) {
-      res.status(404).json({ error: "Not found" });
-      return;
-    }
+    if (!config) { res.status(404).json({ error: "Not found" }); return; }
     res.json({
       ...config,
       apiKey: config.apiKey ? "••••" + config.apiKey.slice(-4) : null,
@@ -106,14 +89,10 @@ app.patch("/api/llm-configs/:id", async (req, res) => {
   }
 });
 
-// Delete config
 app.delete("/api/llm-configs/:id", async (req, res) => {
   try {
     const deleted = await db.deleteLLMConfig(parseInt(req.params.id));
-    if (!deleted) {
-      res.status(404).json({ error: "Not found" });
-      return;
-    }
+    if (!deleted) { res.status(404).json({ error: "Not found" }); return; }
     res.json({ ok: true });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -161,15 +140,15 @@ interface ClientMessage {
 
 /**
  * A single WebSocket connection = a single battle session.
+ * Thin wrapper: wires BattleRunner → WS renderer → browser.
  */
 class GameSession {
   private ws: WebSocket;
-  private player?: Character;
-  private enemy?: Character;
   private humanAgent?: HumanAgent;
   private enemyAgent?: IAgent;
-  private turnNumber = 0;
-  private finished = false;
+  private runner?: BattleRunner;
+  private playerChar?: Character;
+  private enemyChar?: Character;
   private startTime = 0;
 
   constructor(ws: WebSocket) {
@@ -192,7 +171,7 @@ class GameSession {
     }
   }
 
-  // ── Start ───────────────────────────────────────────
+  // ── Start Battle ─────────────────────────────────────
 
   private async startBattle(msg: ClientMessage) {
     const playerClass = (msg.class || "warrior") as CharacterClass;
@@ -206,10 +185,9 @@ class GameSession {
     const enemyClass = otherClasses[Math.floor(Math.random() * otherClasses.length)];
     const playerName = msg.name?.trim() || "Hero";
 
-    this.player = createCharacter("player", playerName, playerClass);
-    this.enemy = createCharacter("enemy", "AI Opponent", enemyClass);
+    this.playerChar = createCharacter("player", playerName, playerClass);
+    this.enemyChar = createCharacter("enemy", "AI Opponent", enemyClass);
 
-    // Create agents
     this.humanAgent = new HumanAgent("player", playerName);
     this.enemyAgent = await this.createEnemyAgent(
       msg.enemyMode || "mock",
@@ -217,148 +195,45 @@ class GameSession {
       msg.llmConfigId
     );
 
-    this.turnNumber = 0;
-    this.finished = false;
     this.startTime = Date.now();
 
-    this.send("battle_start", {
-      playerId: this.player.id,
-      enemyId: this.enemy.id,
-      playerClass: this.player.class,
-      enemyClass: this.enemy.class,
-      state: this.getState(),
-    });
+    // Wire: BattleRunner → WS renderer → browser
+    const wsRenderer = createWsRenderer(this.ws, "player");
 
-    this.send("info", {
-      narrative: `⚔️ Battle begins! ${this.player.name} (${this.player.class}) vs ${this.enemy.name} (${this.enemy.class})`,
-    });
+    this.runner = new BattleRunner(
+      [this.playerChar, this.enemyChar],
+      [this.humanAgent, this.enemyAgent],
+      {
+        maxTurns: 50,
+        turnDelayMs: 0, // no artificial delay for real-time play
+        eventHandler: wsRenderer,
+      }
+    );
 
-    this.runBattleLoop();
+    // Run battle in background — human agent resolves when browser sends action
+    this.runBattle();
   }
 
-  private async createEnemyAgent(
-    mode: string,
-    charClass: CharacterClass,
-    llmConfigId?: number
-  ): Promise<IAgent> {
-    if (mode === "llm") {
-      // Try to load config from DB
-      let config = llmConfigId
-        ? await db.getLLMConfig(llmConfigId)
-        : await db.getDefaultLLMConfig();
-
-      // Fallback to env vars or defaults
-      const model = config?.model || process.env.LLM_MODEL || "gpt-4o-mini";
-      const apiKey = config?.apiKey || process.env.LLM_API_KEY || "sk-placeholder";
-      const baseUrl = config?.baseUrl || process.env.LLM_BASE_URL || "https://api.openai.com/v1";
-
-      return new LLMAgent({
-        id: "enemy",
-        name: "AI Opponent",
-        characterClass: charClass,
-        model,
-        apiKey,
-        baseURL: baseUrl,
-      });
-    }
-    return new HeuristicAgent("enemy", "AI Opponent");
-  }
-
-  // ── Battle Loop ─────────────────────────────────────
-
-  private async runBattleLoop() {
+  private async runBattle() {
     try {
-      const snapshot = this.getState();
-      this.humanAgent!.onBattleStart?.(snapshot);
-      if (this.enemyAgent!.onBattleStart) {
-        await this.enemyAgent!.onBattleStart(snapshot);
-      }
+      const log = await this.runner!.run();
 
-      while (!this.finished && this.turnNumber < 50) {
-        this.turnNumber++;
-        const order = determineTurnOrder([this.player!, this.enemy!]);
+      // Save replay
+      const replayPath = saveReplay(log, this.runner!.getCharacters(), this.runner!.getAgents());
+      console.error(`Replay saved to ${replayPath}`);
 
-        for (const character of order) {
-          if (this.finished) break;
+      // Save battle log to DB
+      const durationMs = Date.now() - this.startTime;
+      db.saveBattleLog({
+        playerName: this.playerChar?.name,
+        playerClass: this.playerChar?.class,
+        enemyClass: this.enemyChar?.class,
+        enemyMode: this.enemyAgent?.type === "llm" ? "llm" : "mock",
+        winner: log.winner || undefined,
+        turns: log.totalTurns,
+        durationMs,
+      }).catch((err) => console.error("Failed to save battle log:", err.message));
 
-          const isPlayer = character.id === "player";
-          const agent = isPlayer ? this.humanAgent! : this.enemyAgent!;
-          const target = isPlayer ? this.enemy! : this.player!;
-
-          this.send("turn_start", {
-            turnNumber: this.turnNumber,
-            state: this.getState(),
-          });
-
-          // Check freeze
-          if (character.statusEffects.some((e) => e.type === "freeze")) {
-            this.send("status", {
-              narrative: `❄️ ${character.name} is frozen and cannot act!`,
-            });
-            tickCooldowns(character);
-            continue;
-          }
-
-          // Ask agent for action
-          if (isPlayer) {
-            this.send("your_turn", {
-              state: this.getState(),
-              turnNumber: this.turnNumber,
-            });
-          } else {
-            this.send("enemy_thinking", { turnNumber: this.turnNumber });
-          }
-
-          const currentSnapshot = this.getState();
-          const action = await agent.getAction(currentSnapshot);
-
-          if (this.finished) break;
-
-          const result = resolveAction(character, target, action);
-
-          this.humanAgent!.onActionResult?.(result);
-          this.enemyAgent!.onActionResult?.(result);
-
-          if (isPlayer) {
-            this.send("action_result", {
-              narrative: result.narrative,
-              result,
-              state: this.getState(),
-              turnNumber: this.turnNumber,
-            });
-          } else {
-            this.send("enemy_result", {
-              narrative: result.narrative,
-              result,
-              state: this.getState(),
-              turnNumber: this.turnNumber,
-            });
-          }
-
-          tickCooldowns(character);
-          const pStatus = processStatusEffects(character);
-          const tStatus = processStatusEffects(target);
-          [...pStatus, ...tStatus].forEach((n) => this.send("status", { narrative: n }));
-
-          if (result.fledSuccessfully) {
-            this.endBattle(target.id, `${character.name} fled!`);
-            break;
-          }
-
-          if (target.stats.hp <= 0) {
-            this.endBattle(character.id, `${target.name} has been defeated!`);
-            break;
-          }
-          if (character.stats.hp <= 0) {
-            this.endBattle(target.id, `${character.name} collapsed!`);
-            break;
-          }
-        }
-      }
-
-      if (!this.finished) {
-        this.endBattle(undefined, "Turn limit reached — it's a draw!");
-      }
     } catch (err: any) {
       console.error("Battle loop error:", err);
       this.send("error", { message: `Battle error: ${err.message}` });
@@ -375,41 +250,42 @@ class GameSession {
       type: raw.type as CombatAction["type"],
       actorId: "player",
       targetId: raw.target === "self" ? "player" : "enemy",
-      spellId: raw.spellId as any,
-      itemId: raw.itemId as any,
+      spellId: raw.spellId,
+      itemId: raw.itemId,
     };
 
     this.humanAgent.submitAction(action);
   }
 
+  // ── Agent Factory ───────────────────────────────────
+
+  private async createEnemyAgent(
+    mode: string,
+    charClass: CharacterClass,
+    llmConfigId?: number
+  ): Promise<IAgent> {
+    if (mode === "llm") {
+      let config = llmConfigId
+        ? await db.getLLMConfig(llmConfigId)
+        : await db.getDefaultLLMConfig();
+
+      const model = config?.model || process.env.LLM_MODEL || "gpt-4o-mini";
+      const apiKey = config?.apiKey || process.env.LLM_API_KEY || "sk-placeholder";
+      const baseUrl = config?.baseUrl || process.env.LLM_BASE_URL || "https://api.openai.com/v1";
+
+      return new LLMAgent({
+        id: "enemy",
+        name: "AI Opponent",
+        characterClass: charClass,
+        model,
+        apiKey,
+        baseURL: baseUrl,
+      });
+    }
+    return new HeuristicAgent("enemy", "AI Opponent");
+  }
+
   // ── Helpers ─────────────────────────────────────────
-
-  private endBattle(winner: string | undefined, reason: string) {
-    this.finished = true;
-    this.send("battle_end", { winner: winner || "draw", reason, state: this.getState() });
-    this.humanAgent?.onBattleEnd?.(winner, reason);
-    this.enemyAgent?.onBattleEnd?.(winner, reason);
-
-    // Save battle log to DB (fire-and-forget)
-    const durationMs = Date.now() - this.startTime;
-    db.saveBattleLog({
-      playerName: this.player?.name,
-      playerClass: this.player?.class,
-      enemyClass: this.enemy?.class,
-      enemyMode: this.enemyAgent?.type === "llm" ? "llm" : "mock",
-      winner: winner || undefined,
-      turns: this.turnNumber,
-      durationMs,
-    }).catch((err) => console.error("Failed to save battle log:", err.message));
-  }
-
-  private getState(): BattleStateSnapshot {
-    return createSnapshot(
-      [this.player!, this.enemy!],
-      this.turnNumber,
-      this.finished ? "finished" : "ongoing"
-    );
-  }
 
   private send(type: string, data: Record<string, unknown> = {}) {
     if (this.ws.readyState === WebSocket.OPEN) {
@@ -418,7 +294,6 @@ class GameSession {
   }
 
   destroy() {
-    this.finished = true;
     this.humanAgent?.destroy();
     this.enemyAgent?.destroy?.();
   }
@@ -445,7 +320,6 @@ wss.on("connection", (ws) => {
 // ── Start ───────────────────────────────────────────────
 
 async function main() {
-  // Connect to DB and run migrations
   console.log("Connecting to database...");
   await db.migrate();
 

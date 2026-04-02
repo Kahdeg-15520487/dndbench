@@ -2,11 +2,17 @@
 // ─────────────────────────────────────────────────────────
 //  Arena CLI — Main entry point
 // ─────────────────────────────────────────────────────────
+//
+//  CLI is just a renderer. BattleRunner is the engine.
+//  Same runner powers WebSocket games in server.ts.
+// ─────────────────────────────────────────────────────────
 
 import { createCharacter } from "./engine/characters.js";
 import { HeuristicAgent, LLMAgent } from "./agent/index.js";
 import type { IAgent } from "./agent/index.js";
 import { BattleRunner } from "./arena/battle-runner.js";
+import { createCliRenderer, printBattleSummary } from "./arena/cli-renderer.js";
+import { saveReplay } from "./arena/replay.js";
 import chalk from "chalk";
 import fs from "fs";
 import path from "path";
@@ -22,11 +28,10 @@ interface CliOptions {
   agent2Class: string;
   agent2Name: string;
   agent2Model: string;
-  mode: string; // "llm" | "mock" | "mixed" | "human"
+  mode: string;
   maxTurns: number;
   delay: number;
   outputFile?: string;
-  verbose: boolean;
 }
 
 function parseArgs(args: string[]): CliOptions {
@@ -40,7 +45,6 @@ function parseArgs(args: string[]): CliOptions {
     mode: "mock",
     maxTurns: 30,
     delay: 1500,
-    verbose: true,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -56,7 +60,6 @@ function parseArgs(args: string[]): CliOptions {
       case "--max-turns": opts.maxTurns = parseInt(args[++i]); break;
       case "--delay": opts.delay = parseInt(args[++i]); break;
       case "--output": case "-o": opts.outputFile = args[++i]; break;
-      case "--quiet": opts.verbose = false; break;
       case "--help": case "-h":
         printHelp();
         process.exit(0);
@@ -88,7 +91,6 @@ Options:
   --max-turns <n>       Maximum turns before draw (default: 30)
   --delay <ms>          Delay between turns in ms (default: 1500)
   --output, -o <file>   Save battle log to JSON file
-  --quiet               Suppress battle output
   --help, -h            Show this help
 
 Environment:
@@ -157,35 +159,33 @@ async function main() {
   const agent1 = createAgent(agent1Mode, char1.id, char1.name, char1.class, opts.agent1Model);
   const agent2 = createAgent(agent2Mode, char2.id, char2.name, char2.class, opts.agent2Model);
 
-  // Create battle runner
+  // Create renderer
+  const agentMap = new Map<string, IAgent>([
+    [char1.id, agent1],
+    [char2.id, agent2],
+  ]);
+  const cliRenderer = createCliRenderer(agentMap);
+
+  // Run battle through the engine
   const runner = new BattleRunner([char1, char2], [agent1, agent2], {
     maxTurns: opts.maxTurns,
     turnDelayMs: opts.delay,
-    verbose: opts.verbose,
+    eventHandler: cliRenderer,
   });
 
-  // Run the battle
   const log = await runner.run();
 
-  // Save log if requested
+  // Save markdown replay (always)
+  const replayPath = saveReplay(log, runner.getCharacters(), runner.getAgents());
+
+  // Save JSON log if requested
   if (opts.outputFile) {
     const outPath = path.resolve(opts.outputFile);
     fs.writeFileSync(outPath, JSON.stringify(log, null, 2));
-    if (opts.verbose) {
-      console.log(chalk.gray(`Battle log saved to ${outPath}`));
-    }
   }
 
-  // Print summary
-  if (opts.verbose) {
-    console.log("═".repeat(60));
-    console.log(chalk.bold("  BATTLE SUMMARY"));
-    console.log("═".repeat(60));
-    console.log(`  Winner: ${log.winner ? chalk.bold.green(log.winner) : chalk.yellow("Draw")}`);
-    console.log(`  Total Turns: ${log.totalTurns}`);
-    console.log(`  Duration: ${log.startTime} → ${log.endTime}`);
-    console.log("═".repeat(60) + "\n");
-  }
+  // Summary
+  printBattleSummary(log.winner, log.totalTurns, log.startTime, log.endTime, replayPath);
 }
 
 main().catch((err) => {
