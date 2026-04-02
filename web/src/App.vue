@@ -20,8 +20,12 @@ interface CharState {
 
 interface ChatMessage {
   id: number;
-  type: "system" | "player" | "enemy" | "status" | "info" | "error";
+  type: "system" | "player" | "enemy" | "status" | "info" | "error" | "thinking";
   text: string;
+  /** For thinking messages: which step index */
+  stepIndex?: number;
+  /** For thinking messages: tool name */
+  toolName?: string;
 }
 
 // ── State ────────────────────────────────────────────────
@@ -30,6 +34,7 @@ const phase = ref<"setup" | "battle" | "ended">("setup");
 const connected = ref(false);
 const myTurn = ref(false);
 const enemyThinking = ref(false);
+const thinkingSteps = ref<Array<{ text: string; toolName?: string; type: string }>>([]);
 const turnNumber = ref(0);
 const playerId = ref("");
 const enemyId = ref("");
@@ -135,10 +140,21 @@ function handleServerMessage(msg: any) {
 
     case "enemy_thinking":
       enemyThinking.value = true;
+      thinkingSteps.value = [];
+      break;
+
+    case "enemy_thinking_step":
+      enemyThinking.value = true;
+      thinkingSteps.value.push({
+        type: msg.type,
+        text: msg.text,
+        toolName: msg.toolName,
+      });
       break;
 
     case "enemy_result":
       enemyThinking.value = false;
+      thinkingSteps.value = [];
       addMessage("enemy", msg.narrative);
       updateState(msg.state);
       break;
@@ -205,6 +221,7 @@ function resetGame() {
   winnerReason.value = "";
   myTurn.value = false;
   enemyThinking.value = false;
+  thinkingSteps.value = [];
   turnNumber.value = 0;
 }
 
@@ -234,6 +251,7 @@ onUnmounted(() => {
     :messages="messages"
     :my-turn="myTurn"
     :enemy-thinking="enemyThinking"
+    :thinking-steps="thinkingSteps"
     :turn-number="turnNumber"
     :winner="winner"
     :winner-reason="winnerReason"

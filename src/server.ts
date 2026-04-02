@@ -280,6 +280,14 @@ class GameSession {
         model,
         apiKey,
         baseURL: baseUrl,
+        onThinking: (step) => {
+          this.send("enemy_thinking_step", {
+            type: step.type,
+            text: step.text,
+            toolName: step.toolName,
+            toolResult: step.toolResult,
+          });
+        },
       });
     }
     return new HeuristicAgent("enemy", "AI Opponent");

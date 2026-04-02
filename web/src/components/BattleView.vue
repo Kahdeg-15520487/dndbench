@@ -16,8 +16,14 @@ interface CharState {
 
 interface ChatMessage {
   id: number;
-  type: "system" | "player" | "enemy" | "status" | "info" | "error";
+  type: "system" | "player" | "enemy" | "status" | "info" | "error" | "thinking";
   text: string;
+}
+
+interface ThinkingStep {
+  type: string;
+  text: string;
+  toolName?: string;
 }
 
 const props = defineProps<{
@@ -28,6 +34,7 @@ const props = defineProps<{
   messages: ChatMessage[];
   myTurn: boolean;
   enemyThinking: boolean;
+  thinkingSteps: ThinkingStep[];
   turnNumber: number;
   winner: string | null;
   winnerReason: string;
@@ -214,14 +221,37 @@ function statusLabel(type: string, turns: number): string {
         <span class="msg-text">{{ msg.text }}</span>
       </div>
 
-      <!-- Enemy thinking indicator -->
-      <div v-if="enemyThinking" class="chat-msg msg-thinking">
-        <span class="msg-text">
-          🤔 Enemy is thinking
-          <span class="typing-dot">.</span>
-          <span class="typing-dot">.</span>
-          <span class="typing-dot">.</span>
-        </span>
+      <!-- Enemy thinking indicator — live feed -->
+      <div v-if="enemyThinking" class="thinking-panel">
+        <div class="thinking-header">
+          <span class="thinking-label">🧠 Enemy thinking</span>
+          <span class="typing-dots">
+            <span class="typing-dot">.</span>
+            <span class="typing-dot">.</span>
+            <span class="typing-dot">.</span>
+          </span>
+        </div>
+        <div v-if="thinkingSteps.length > 0" class="thinking-steps">
+          <div
+            v-for="(step, idx) in thinkingSteps"
+            :key="idx"
+            class="thinking-step"
+            :class="'step-' + step.type"
+          >
+            <span class="step-icon">
+              {{ step.type === 'thinking' ? '💭' : step.type === 'tool_call' ? '🔧' : '📋' }}
+            </span>
+            <span class="step-text">
+              {{ step.type === 'tool_call' ? step.toolName : step.type === 'tool_result' ? step.text : step.text }}
+            </span>
+          </div>
+        </div>
+        <div v-else class="thinking-steps">
+          <div class="thinking-step step-waiting">
+            <span class="step-icon">⏳</span>
+            <span class="step-text">Analyzing battlefield...</span>
+          </div>
+        </div>
       </div>
     </section>
 
@@ -497,6 +527,71 @@ function statusLabel(type: string, turns: number): string {
   align-self: flex-start;
   color: var(--text-dim);
   font-size: 13px;
+  font-style: italic;
+}
+
+/* ── Thinking Panel (live feed) ────────────────────── */
+.thinking-panel {
+  align-self: flex-start;
+  width: 85%;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.2);
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.thinking-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.thinking-label {
+  font-weight: 600;
+  color: #a78bfa;
+}
+.typing-dots {
+  display: inline-flex;
+  gap: 2px;
+}
+.thinking-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.thinking-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 2px 0;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.step-icon {
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.step-text {
+  word-break: break-word;
+}
+.step-tool_call .step-text {
+  color: #c4b5fd;
+  font-weight: 600;
+}
+.step-tool_result .step-text {
+  color: #86efac;
+  font-size: 11px;
+  opacity: 0.8;
+}
+.step-thinking .step-text {
+  color: #fde68a;
+  font-style: italic;
+  font-size: 11px;
+}
+.step-waiting .step-text {
+  color: var(--text-dim);
   font-style: italic;
 }
 

@@ -35,6 +35,17 @@ import {
 
 // ── Config ──────────────────────────────────────────────
 
+export interface ThinkingStep {
+  /** What the agent is doing */
+  type: "thinking" | "tool_call" | "tool_result";
+  /** Human-readable summary */
+  text: string;
+  /** Tool name (for tool_call / tool_result) */
+  toolName?: string;
+  /** Tool result summary (for tool_result) */
+  toolResult?: string;
+}
+
 export interface LLMAgentConfig {
   id: string;
   name: string;
@@ -45,6 +56,8 @@ export interface LLMAgentConfig {
   provider?: string;
   systemPrompt?: string;
   maxIterations?: number;
+  /** Called during agentic loop to stream thinking steps to the UI */
+  onThinking?: (step: ThinkingStep) => void;
 }
 
 // ── Minimal Resource Loader ─────────────────────────────
@@ -83,10 +96,14 @@ export class LLMAgent implements IAgent {
   private currentSnapshot: BattleStateSnapshot | null = null;
   private enemyId = "";
 
+  // Thinking callback
+  private onThinking?: (step: ThinkingStep) => void;
+
   constructor(config: LLMAgentConfig) {
     this.id = config.id;
     this.name = config.name;
     this.config = config;
+    this.onThinking = config.onThinking;
   }
 
   // ── Lifecycle ───────────────────────────────────────
@@ -164,15 +181,44 @@ export class LLMAgent implements IAgent {
       const t = event.type;
       if (t === "message_update") {
         const sub = event.assistantMessageEvent;
-        if (sub.type === "thinking_delta") thinkingBuf += sub.delta;
-        if (sub.type === "text_delta") thinkingBuf += sub.delta;
-        if (sub.type === "toolcall_start") toolCalls.push(sub.toolCall?.name || "?");
+        if (sub.type === "thinking_delta") {
+          thinkingBuf += sub.delta;
+        }
+        if (sub.type === "text_delta") {
+          thinkingBuf += sub.delta;
+        }
+        if (sub.type === "toolcall_start") {
+          const name = sub.toolCall?.name || "?";
+          toolCalls.push(name);
+          this.onThinking?.({
+            type: "tool_call",
+            text: `Calling ${name}...`,
+            toolName: name,
+          });
+        }
       } else if (t === "tool_execution_start") {
         toolCalls.push(event.toolName);
+        this.onThinking?.({
+          type: "tool_call",
+          text: `Using ${event.toolName}...`,
+          toolName: event.toolName,
+        });
+      } else if (t === "tool_execution_end") {
+        this.onThinking?.({
+          type: "tool_result",
+          text: event.isError ? "Error" : "Done",
+          toolName: event.toolName,
+        });
       } else if (t === "turn_end") {
         if (thinkingBuf || toolCalls.length) {
           const think = thinkingBuf.length > 120 ? thinkingBuf.slice(0, 120) + "…" : thinkingBuf;
           console.error(`[${this.name}] think: ${think || "(none)"} | tools: ${toolCalls.join(", ")}`);
+          if (thinkingBuf.trim()) {
+            this.onThinking?.({
+              type: "thinking",
+              text: thinkingBuf.trim().slice(0, 200),
+            });
+          }
         }
         thinkingBuf = "";
         toolCalls = [];
