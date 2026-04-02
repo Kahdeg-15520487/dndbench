@@ -1,30 +1,38 @@
 // ─────────────────────────────────────────────────────────
-//  LLM Agent — agentic loop with observe → think → act
+//  LLM Agent — powered by pi's agent SDK
 // ─────────────────────────────────────────────────────────
 //
-//  The LLM can call **observation tools** (inspect_enemy, review_spells,
-//  etc.) as many times as it wants before committing to an **action tool**.
-//  This gives the LLM a proper reasoning chain instead of a single shot.
+//  Uses pi's createAgentSession as the LLM runtime.
+//  The agent has OBSERVATION tools (free, return data) and
+//  ACTION tools (commit the turn). When an action tool fires,
+//  we capture it and abort the session loop.
 //
 //  Flow per turn:
 //    1. Engine calls getAction(state)
-//    2. Agent builds system prompt from state
-//    3. Agentic loop (up to MAX_ITERATIONS):
-//       a. Send messages + tools to LLM
-//       b. If observation tool call → execute, append result, continue
-//       c. If action tool call → convert to CombatAction, return it
-//       d. If no tool call → fallback to attack
-//    4. Return action to engine
+//    2. We session.prompt() with the battle state
+//    3. Agent calls observation tools → data returned, loop continues
+//    4. Agent calls an action tool → execute() resolves our Promise
+//    5. We abort the session and return the CombatAction
 // ─────────────────────────────────────────────────────────
 
-import OpenAI from "openai";
+import { Type } from "@sinclair/typebox";
+import {
+  createAgentSession,
+  SessionManager,
+  AuthStorage,
+  ModelRegistry,
+  SettingsManager,
+  createExtensionRuntime,
+  type AgentSession,
+  type ResourceLoader,
+} from "@mariozechner/pi-coding-agent";
+import { getModel } from "@mariozechner/pi-ai";
 import { IAgent } from "./interface.js";
 import {
   BattleStateSnapshot,
   CombatAction,
   CombatResult,
 } from "../engine/types.js";
-import { getAgenticTools } from "../tools/definitions.js";
 
 // ── Config ──────────────────────────────────────────────
 
@@ -35,223 +43,403 @@ export interface LLMAgentConfig {
   model: string;
   apiKey?: string;
   baseURL?: string;
+  provider?: string;
   systemPrompt?: string;
-  maxIterations?: number; // max tool-call rounds per turn (default: 5)
+  maxIterations?: number;
 }
 
-const DEFAULT_MAX_ITERATIONS = 5;
+// ── Minimal Resource Loader ─────────────────────────────
 
-// ── Observation Tool Handlers ───────────────────────────
-// These return text data to the LLM without consuming a turn.
-
-type ObservationHandler = (
-  args: Record<string, any>,
-  state: BattleStateSnapshot,
-  myId: string
-) => string;
-
-const observationHandlers: Record<string, ObservationHandler> = {
-  inspect_self(_args, state, myId) {
-    const me = state.characters.find((c) => c.id === myId)!;
-    return JSON.stringify({
-      name: me.name,
-      hp: `${me.hp}/${me.maxHp}`,
-      mp: `${me.mp}/${me.maxMp}`,
-      hpPercent: Math.round((me.hp / me.maxHp) * 100),
-      mpPercent: Math.round((me.mp / me.maxMp) * 100),
-      isDefending: me.isDefending,
-      statusEffects: me.statusEffects,
-    }, null, 2);
-  },
-
-  inspect_enemy(_args, state, myId) {
-    const enemy = state.characters.find((c) => c.id !== myId)!;
-    return JSON.stringify({
-      name: enemy.name,
-      hp: `${enemy.hp}/${enemy.maxHp}`,
-      mp: `${enemy.mp}/${enemy.maxMp}`,
-      hpPercent: Math.round((enemy.hp / enemy.maxHp) * 100),
-      statusEffects: enemy.statusEffects,
-      isDefending: enemy.isDefending,
-    }, null, 2);
-  },
-
-  review_spells(_args, state, myId) {
-    const me = state.characters.find((c) => c.id === myId)!;
-    return JSON.stringify(
-      me.spells.map((s) => ({
-        id: s.id,
-        name: s.name,
-        ready: s.currentCooldown === 0,
-        cooldownRemaining: s.currentCooldown,
-      })),
-      null,
-      2
-    );
-  },
-
-  review_inventory(_args, state, myId) {
-    const me = state.characters.find((c) => c.id === myId)!;
-    return JSON.stringify(
-      me.inventory.filter((i) => i.quantity > 0),
-      null,
-      2
-    );
-  },
-};
+function makeResourceLoader(systemPrompt: string): ResourceLoader {
+  return {
+    getExtensions: () => ({
+      extensions: [],
+      errors: [],
+      runtime: createExtensionRuntime(),
+    }),
+    getSkills: () => ({ skills: [], diagnostics: [] }),
+    getPrompts: () => ({ prompts: [], diagnostics: [] }),
+    getThemes: () => ({ themes: [], diagnostics: [] }),
+    getAgentsFiles: () => ({ agentsFiles: [] }),
+    getSystemPrompt: () => systemPrompt,
+    getAppendSystemPrompt: () => [],
+    extendResources: () => {},
+    reload: async () => {},
+  };
+}
 
 // ── Agent Class ─────────────────────────────────────────
 
 export class LLMAgent implements IAgent {
   readonly type = "llm" as const;
+  readonly id: string;
+  readonly name: string;
 
   private config: LLMAgentConfig;
-  private client: OpenAI;
-  private conversationHistory: OpenAI.Chat.ChatCompletionMessageParam[] = [];
+  private session: AgentSession | null = null;
   private turnCount = 0;
-  private maxIterations: number;
+
+  // Turn state — resolved when action tool fires
+  private actionResolve: ((action: CombatAction) => void) | null = null;
+  private currentSnapshot: BattleStateSnapshot | null = null;
+  private enemyId = "";
 
   constructor(config: LLMAgentConfig) {
+    this.id = config.id;
+    this.name = config.name;
     this.config = config;
-    this.maxIterations = config.maxIterations ?? DEFAULT_MAX_ITERATIONS;
-
-    this.client = new OpenAI({
-      apiKey: config.apiKey || process.env.LLM_API_KEY || "sk-placeholder",
-      baseURL: config.baseURL || process.env.LLM_BASE_URL || "https://api.openai.com/v1",
-    });
   }
 
-  onBattleStart(state: BattleStateSnapshot): void {
-    // Fresh conversation for each battle
-    this.conversationHistory = [];
+  // ── Lifecycle ───────────────────────────────────────
+
+  async onBattleStart(state: BattleStateSnapshot): Promise<void> {
     this.turnCount = 0;
+    this.currentSnapshot = state;
+
     const me = state.characters.find((c) => c.id === this.id)!;
     const enemy = state.characters.find((c) => c.id !== this.id)!;
+    this.enemyId = enemy.id;
 
-    this.conversationHistory.push({
-      role: "system",
-      content: this.buildSystemPrompt(me, enemy),
+    // Build pi session
+    const systemPrompt = this.buildSystemPrompt(me, enemy);
+    const authStorage = AuthStorage.create();
+
+    // Set API key if provided
+    const provider = this.resolveProvider();
+    if (this.config.apiKey) {
+      (authStorage as any).setRuntimeApiKey(provider, this.config.apiKey);
+    }
+
+    // ModelRegistry constructor is private in type defs, but works at runtime
+    const modelRegistry = new (ModelRegistry as any)(authStorage);
+
+    // Try to find a built-in model, or create a custom one via models.json-like config
+    const model = this.resolveModel(modelRegistry, provider);
+
+    const tools = this.buildTools();
+
+    const { session } = await createAgentSession({
+      model,
+      thinkingLevel: "off",
+      authStorage,
+      modelRegistry,
+      resourceLoader: makeResourceLoader(systemPrompt),
+      tools: [], // No built-in coding tools
+      customTools: tools,
+      sessionManager: SessionManager.inMemory(),
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: false },
+        retry: { enabled: false },
+      }),
     });
+
+    this.session = session;
   }
 
   async getAction(snapshot: BattleStateSnapshot): Promise<CombatAction> {
     this.turnCount++;
+    this.currentSnapshot = snapshot;
 
-    const me = snapshot.characters.find((c) => c.id === this.id)!;
-    const enemy = snapshot.characters.find((c) => c.id !== this.id)!;
-
-    // Update system prompt with latest state
-    this.conversationHistory[0] = {
-      role: "system",
-      content: this.buildSystemPrompt(me, enemy),
+    // Default fallback
+    const defaultAction: CombatAction = {
+      type: "attack",
+      actorId: this.id,
+      targetId: this.enemyId,
     };
 
-    // Prompt the LLM to think
-    this.conversationHistory.push({
-      role: "user",
-      content: `Turn ${snapshot.turnNumber}. Analyze the situation and choose your action. You may inspect the battlefield first, then commit to an action.`,
-    });
+    if (!this.session) return defaultAction;
 
     try {
-      return await this.agenticLoop(snapshot);
-    } catch (error: any) {
-      console.error(
-        `[${this.name}] Agentic loop error: ${error.message}. Defaulting to attack.`
-      );
-      return {
-        type: "attack",
-        actorId: this.id,
-        targetId: enemy.id,
-      };
+      const action = await new Promise<CombatAction>(async (resolve) => {
+        this.actionResolve = resolve;
+
+        // Prompt the agent — runs in background
+        const promptText = this.buildTurnPrompt(snapshot);
+        this.session!.prompt(promptText).catch((err) => {
+          // Abort throws — that's fine if we already resolved
+          if (this.actionResolve) {
+            console.warn(`[${this.name}] Prompt error: ${err.message}`);
+            resolve(defaultAction);
+          }
+        });
+      });
+
+      return action;
+    } catch (err: any) {
+      console.error(`[${this.name}] getAction error: ${err.message}`);
+      return defaultAction;
     }
   }
 
   onActionResult(result: CombatResult): void {
-    // Add the narrative to conversation so the LLM remembers what happened
-    this.conversationHistory.push({
-      role: "user",
-      content: `Last action result: ${result.narrative}`,
-    });
+    // Could feed result back to session via steer/followUp
+    // For now, we include it in next turn's prompt
   }
 
   onBattleEnd(winner: string | undefined, reason: string): void {
-    const won = winner === this.id;
-    this.conversationHistory.push({
-      role: "user",
-      content: `Battle over! ${reason}. ${won ? "You won!" : "You lost."}`,
-    });
+    // Cleanup
   }
 
   destroy(): void {
-    this.conversationHistory = [];
+    if (this.session) {
+      this.session.abort().catch(() => {});
+      this.session.dispose();
+      this.session = null;
+    }
+    this.actionResolve = null;
   }
 
-  // ── Agentic Loop ────────────────────────────────────
+  // ── Provider / Model Resolution ─────────────────────
 
-  private async agenticLoop(snapshot: BattleStateSnapshot): Promise<CombatAction> {
-    const tools = getAgenticTools();
-    const enemyId = snapshot.characters.find((c) => c.id !== this.id)!.id;
+  private resolveProvider(): string {
+    if (this.config.provider) return this.config.provider;
+    const base = (this.config.baseURL || "").toLowerCase();
+    if (base.includes("anthropic")) return "anthropic";
+    if (base.includes("groq")) return "groq";
+    if (base.includes("together")) return "together";
+    if (base.includes("google") || base.includes("gemini")) return "google";
+    return "openai";
+  }
 
-    for (let i = 0; i < this.maxIterations; i++) {
-      const response = await this.client.chat.completions.create({
-        model: this.config.model,
-        messages: this.conversationHistory,
-        tools,
-        tool_choice: "auto",
-        temperature: 0.8,
-        max_tokens: 300,
-      });
+  private resolveProviderForAuth(): string {
+    // AuthStorage.setRuntimeApiKey expects known provider names
+    const provider = this.resolveProvider();
+    return provider;
+  }
 
-      const message = response.choices[0]?.message;
-      if (!message) throw new Error("No response from LLM");
+  private resolveModel(modelRegistry: any, provider: string) {
+    // Try built-in model first
+    const builtIn = getModel(provider as any, this.config.model);
+    if (builtIn) return builtIn;
 
-      this.conversationHistory.push(message);
+    // Try registry (includes custom models from models.json)
+    const found = modelRegistry.find(provider, this.config.model);
+    if (found) return found;
 
-      if (!message.tool_calls || message.tool_calls.length === 0) {
-        // No tool call — LLM just talked. Prompt again.
-        this.conversationHistory.push({
-          role: "user",
-          content: "Please use one of the available tools to take your action.",
-        });
-        continue;
-      }
+    // Fallback: create a synthetic model descriptor
+    // This handles arbitrary OpenAI-compatible APIs (Ollama, LM Studio, etc.)
+    return {
+      id: this.config.model,
+      name: this.config.model,
+      provider,
+      api: "openai-completions",
+      baseUrl: this.config.baseURL || "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"] as ("text" | "image")[],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 2048,
+    } as any;
+  }
 
-      // Process all tool calls in this round
-      for (const toolCall of message.tool_calls) {
-        const toolName = toolCall.function.name;
-        const args = JSON.parse(toolCall.function.arguments || "{}");
+  // ── Tool Definitions ────────────────────────────────
 
-        // Is it an observation tool?
-        if (toolName in observationHandlers) {
-          const result = observationHandlers[toolName](args, snapshot, this.id);
-          this.conversationHistory.push({
-            role: "tool",
-            content: result,
-            tool_call_id: toolCall.id,
-          });
-          // Continue the loop — LLM can observe more or commit to action
-          continue;
-        }
+  private buildTools() {
+    return [
+      // ── Observation tools (return data, loop continues) ──
+      {
+        name: "inspect_self",
+        label: "Inspect Self",
+        description: "Get your detailed stats: HP, MP, status effects, defending state.",
+        promptSnippet: "Check your own HP, MP, and status effects",
+        parameters: Type.Object({}),
+        execute: async () => {
+          const me = this.currentSnapshot!.characters.find((c) => c.id === this.id)!;
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({
+                name: me.name,
+                hp: `${me.hp}/${me.maxHp}`,
+                mp: `${me.mp}/${me.maxMp}`,
+                hpPercent: Math.round((me.hp / me.maxHp) * 100),
+                mpPercent: Math.round((me.mp / me.maxMp) * 100),
+                isDefending: me.isDefending,
+                statusEffects: me.statusEffects,
+              }, null, 2),
+            }],
+            details: {},
+          };
+        },
+      },
+      {
+        name: "inspect_enemy",
+        label: "Inspect Enemy",
+        description: "Get enemy's visible stats: HP, MP, status effects.",
+        promptSnippet: "Check enemy HP, status effects",
+        parameters: Type.Object({}),
+        execute: async () => {
+          const enemy = this.currentSnapshot!.characters.find((c) => c.id !== this.id)!;
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify({
+                name: enemy.name,
+                hp: `${enemy.hp}/${enemy.maxHp}`,
+                mp: `${enemy.mp}/${enemy.maxMp}`,
+                hpPercent: Math.round((enemy.hp / enemy.maxHp) * 100),
+                statusEffects: enemy.statusEffects,
+                isDefending: enemy.isDefending,
+              }, null, 2),
+            }],
+            details: {},
+          };
+        },
+      },
+      {
+        name: "review_spells",
+        label: "Review Spells",
+        description: "List your available spells with cooldown status and MP cost.",
+        promptSnippet: "Check which spells are ready and their costs",
+        parameters: Type.Object({}),
+        execute: async () => {
+          const me = this.currentSnapshot!.characters.find((c) => c.id === this.id)!;
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify(
+                me.spells.map((s) => ({
+                  id: s.id,
+                  name: s.name,
+                  type: s.type,
+                  mpCost: s.mpCost,
+                  ready: s.currentCooldown === 0,
+                  cooldownRemaining: s.currentCooldown,
+                })),
+                null,
+                2
+              ),
+            }],
+            details: {},
+          };
+        },
+      },
+      {
+        name: "review_inventory",
+        label: "Review Inventory",
+        description: "List your usable items with remaining quantities.",
+        promptSnippet: "Check your available items",
+        parameters: Type.Object({}),
+        execute: async () => {
+          const me = this.currentSnapshot!.characters.find((c) => c.id === this.id)!;
+          return {
+            content: [{
+              type: "text" as const,
+              text: JSON.stringify(
+                me.inventory.filter((i) => i.quantity > 0),
+                null,
+                2
+              ),
+            }],
+            details: {},
+          };
+        },
+      },
 
-        // It's an action tool — commit and return
-        this.conversationHistory.push({
-          role: "tool",
-          content: `Action committed: ${toolName}`,
-          tool_call_id: toolCall.id,
-        });
+      // ── Action tools (commit the turn) ──
+      {
+        name: "attack",
+        label: "Attack",
+        description: "Basic physical attack against the enemy. Reliable, no MP cost.",
+        promptSnippet: "Attack the enemy",
+        parameters: Type.Object({}),
+        execute: async () => this.commitAction({
+          type: "attack",
+          actorId: this.id,
+          targetId: this.enemyId,
+        }),
+      },
+      {
+        name: "defend",
+        label: "Defend",
+        description: "Raise your guard, reducing incoming damage this turn.",
+        promptSnippet: "Defend to reduce damage",
+        parameters: Type.Object({}),
+        execute: async () => this.commitAction({
+          type: "defend",
+          actorId: this.id,
+        }),
+      },
+      {
+        name: "cast_spell",
+        label: "Cast Spell",
+        description: "Cast a spell. Requires spell_id. Costs MP.",
+        promptSnippet: "Cast a spell (fire, ice, heal, etc.)",
+        parameters: Type.Object({
+          spell_id: Type.String({ description: "Spell ID to cast (e.g. fire, heal, shield)" }),
+          target: Type.Optional(Type.String({
+            description: '"self" for self-target spells, omit for enemy (default)',
+            enum: ["self", "enemy"],
+          })),
+        }),
+        execute: async (_id: any, params: any) => this.commitAction({
+          type: "cast_spell",
+          actorId: this.id,
+          targetId: params.target === "self" ? this.id : this.enemyId,
+          spellId: params.spell_id,
+        }),
+      },
+      {
+        name: "use_item",
+        label: "Use Item",
+        description: "Use an item from your inventory (health_potion, mana_potion, bomb, antidote, elixir).",
+        promptSnippet: "Use an item from inventory",
+        parameters: Type.Object({
+          item_id: Type.String({ description: "Item ID to use (e.g. health_potion, mana_potion, bomb)" }),
+        }),
+        execute: async (_id: any, params: any) => this.commitAction({
+          type: "use_item",
+          actorId: this.id,
+          itemId: params.item_id,
+        }),
+      },
+      {
+        name: "wait",
+        label: "Wait",
+        description: "Do nothing this turn. Cooldowns still tick.",
+        promptSnippet: "Wait (skip turn)",
+        parameters: Type.Object({}),
+        execute: async () => this.commitAction({
+          type: "wait",
+          actorId: this.id,
+        }),
+      },
+      {
+        name: "flee",
+        label: "Flee",
+        description: "Attempt to flee the battle. Success depends on your speed vs enemy. You lose if it fails.",
+        promptSnippet: "Try to flee the battle",
+        parameters: Type.Object({}),
+        execute: async () => this.commitAction({
+          type: "flee",
+          actorId: this.id,
+        }),
+      },
+    ];
+  }
 
-        return this.toolCallToAction(toolName, args, enemyId);
-      }
+  /** Called by action tool execute() — resolves the turn Promise and aborts the session */
+  private async commitAction(action: CombatAction) {
+    // Resolve the Promise in getAction()
+    if (this.actionResolve) {
+      const resolve = this.actionResolve;
+      this.actionResolve = null;
+      resolve(action);
     }
 
-    // Max iterations reached — fallback to attack
-    console.warn(
-      `[${this.name}] Max iterations (${this.maxIterations}) reached. Defaulting to attack.`
-    );
-    return { type: "attack", actorId: this.id, targetId: enemyId };
+    // Abort the session to stop further processing
+    // Use setImmediate to let the tool result return first
+    setImmediate(() => {
+      this.session?.abort().catch(() => {});
+    });
+
+    return {
+      content: [{ type: "text" as const, text: `Action committed: ${action.type}` }],
+      details: { action },
+    };
   }
 
-  // ── System Prompt ───────────────────────────────────
+  // ── Prompt Building ─────────────────────────────────
 
   private buildSystemPrompt(
     me: BattleStateSnapshot["characters"][0],
@@ -260,63 +448,54 @@ export class LLMAgent implements IAgent {
     return `You are an expert RPG battle AI controlling ${me.name} (${this.config.characterClass}).
 Your opponent is ${enemy.name}.
 
-## BATTLE STATE
-Your HP: ${me.hp}/${me.maxHp} (${Math.round((me.hp / me.maxHp) * 100)}%) ${me.hp < me.maxHp * 0.3 ? "⚠️ CRITICAL!" : ""}
-Your MP: ${me.mp}/${me.maxMp}
-Your Status: ${me.statusEffects.length > 0 ? me.statusEffects.map((e) => `${e.type} (${e.turnsRemaining}t)`).join(", ") : "None"}
-Enemy HP: ${enemy.hp}/${enemy.maxHp} (${Math.round((enemy.hp / enemy.maxHp) * 100)}%)
-Enemy Status: ${enemy.statusEffects.length > 0 ? enemy.statusEffects.map((e) => `${e.type} (${e.turnsRemaining}t)`).join(", ") : "None"}
-
-## AVAILABLE TOOLS
-You have TWO kinds of tools:
+## TOOLS
+You have two kinds of tools:
 
 1. OBSERVATION TOOLS (free — call as many as you want before acting):
    - inspect_self: Your detailed stats (HP, MP, status effects)
-   - inspect_enemy: Enemy's detailed stats
-   - review_spells: Your spells with cooldown status
+   - inspect_enemy: Enemy's visible stats
+   - review_spells: Your spells with cooldown status and MP cost
    - review_inventory: Your usable items with quantities
 
 2. ACTION TOOLS (commits your turn — call EXACTLY ONE):
    - attack, defend, cast_spell, use_item, wait, flee
 
-## STRATEGY
-- Use observation tools first to assess the situation
-- If HP is low, heal or defend
-- If MP is low, wait or use mana potions
-- Watch spell cooldowns — don't try unavailable spells
-- Use status effects strategically (poison for attrition, freeze to deny turns)
-- Be unpredictable — don't always do the same thing
+## RULES
+- First call observation tools to assess the situation, then call ONE action tool.
+- You have LIMITED TIME. Observe quickly, then act decisively.
+- Do NOT write explanations. Just call tools.
+- If HP is low, heal or defend.
+- If MP is low, use items or wait.
+- Use status effects strategically.
 
 ${this.config.systemPrompt || ""}`;
   }
 
-  // ── Tool Call → Action ──────────────────────────────
+  private buildTurnPrompt(snapshot: BattleStateSnapshot): string {
+    const me = snapshot.characters.find((c) => c.id === this.id)!;
+    const enemy = snapshot.characters.find((c) => c.id !== this.id)!;
 
-  private toolCallToAction(
-    toolName: string,
-    args: Record<string, any>,
-    enemyId: string
-  ): CombatAction {
-    switch (toolName) {
-      case "attack":
-        return { type: "attack", actorId: this.id, targetId: enemyId };
-      case "defend":
-        return { type: "defend", actorId: this.id };
-      case "cast_spell":
-        return {
-          type: "cast_spell",
-          actorId: this.id,
-          targetId: args.target === "self" ? this.id : enemyId,
-          spellId: args.spell_id,
-        };
-      case "use_item":
-        return { type: "use_item", actorId: this.id, itemId: args.item_id };
-      case "wait":
-        return { type: "wait", actorId: this.id };
-      case "flee":
-        return { type: "flee", actorId: this.id };
-      default:
-        return { type: "attack", actorId: this.id, targetId: enemyId };
-    }
+    const myStatus = me.statusEffects.length > 0
+      ? me.statusEffects.map((e) => `${e.type}(${e.turnsRemaining}t)`).join(", ")
+      : "None";
+    const enemyStatus = enemy.statusEffects.length > 0
+      ? enemy.statusEffects.map((e) => `${e.type}(${e.turnsRemaining}t)`).join(", ")
+      : "None";
+
+    const lastResult = this.lastResult
+      ? `\nLast action result: ${this.lastResult}`
+      : "";
+
+    return `Turn ${snapshot.turnNumber}.
+Your HP: ${me.hp}/${me.maxHp} (${Math.round((me.hp / me.maxHp) * 100)}%) | MP: ${me.mp}/${me.maxMp} | Status: ${myStatus}${me.hp < me.maxHp * 0.3 ? " ⚠️ CRITICAL!" : ""}
+Enemy HP: ${enemy.hp}/${enemy.maxHp} (${Math.round((enemy.hp / enemy.maxHp) * 100)}%) | Status: ${enemyStatus}
+Observe then act NOW.${lastResult}`;
+  }
+
+  private lastResult = "";
+
+  // Track last result for next turn context
+  onActionResult_(result: CombatResult): void {
+    this.lastResult = result.narrative;
   }
 }

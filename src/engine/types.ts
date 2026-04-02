@@ -106,8 +106,8 @@ export interface CombatAction {
   type: ActionType;
   actorId: string;
   targetId?: string;      // who to target
-  spellId?: SpellId;
-  itemId?: ItemId;
+  spellId?: string;
+  itemId?: string;
 }
 
 export interface DamageResult {
@@ -172,7 +172,7 @@ export interface BattleStateSnapshot {
     maxMp: number;
     statusEffects: { type: StatusEffectType; turnsRemaining: number }[];
     isDefending: boolean;
-    spells: { id: string; name: string; currentCooldown: number }[];
+    spells: { id: string; name: string; type: string; mpCost: number; currentCooldown: number }[];
     inventory: { id: string; name: string; quantity: number }[];
   }[];
   turnNumber: number;

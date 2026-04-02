@@ -510,6 +510,8 @@ export function createSnapshot(
       spells: c.spells.map((s) => ({
         id: s.id,
         name: s.name,
+        type: s.type,
+        mpCost: s.mpCost,
         currentCooldown: s.currentCooldown,
       })),
       inventory: c.inventory

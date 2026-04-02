@@ -270,7 +270,9 @@ class GameSession {
     try {
       const snapshot = this.getState();
       this.humanAgent!.onBattleStart?.(snapshot);
-      this.enemyAgent!.onBattleStart?.(snapshot);
+      if (this.enemyAgent!.onBattleStart) {
+        await this.enemyAgent!.onBattleStart(snapshot);
+      }
 
       while (!this.finished && this.turnNumber < 50) {
         this.turnNumber++;

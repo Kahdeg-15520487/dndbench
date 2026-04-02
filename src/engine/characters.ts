@@ -14,7 +14,7 @@ import {
 
 // ── Base Stat Profiles ──────────────────────────────────
 
-const CLASS_STATS: Record<CharacterClass, Omit<Stats, "hp" | "mp"> & { baseHp: number; baseMp: number }> = {
+const CLASS_STATS: Record<CharacterClass, { baseHp: number; baseMp: number; strength: number; defense: number; magic: number; speed: number; luck: number }> = {
   warrior: {
     baseHp: 120,
     baseMp: 30,

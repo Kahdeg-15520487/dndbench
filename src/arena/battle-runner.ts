@@ -88,7 +88,7 @@ export class BattleRunner {
 
     // Notify all agents
     for (const agent of this.agents) {
-      agent.onBattleStart?.(snapshot);
+      await agent.onBattleStart?.(snapshot);
     }
 
     this.emit({ type: "battle_start", characters: this.characters });

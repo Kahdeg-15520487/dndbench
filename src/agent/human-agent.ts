@@ -74,7 +74,7 @@ export class HumanAgent implements IAgent {
 
   onActionResult(_result: CombatResult): void {}
 
-  onBattleEnd(): void {
+  onBattleEnd(_winner?: string, _reason?: string): void {
     // If battle ends while waiting for input, resolve with a no-op
     if (this.pendingResolver) {
       const resolver = this.pendingResolver;

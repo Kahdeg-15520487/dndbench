@@ -37,7 +37,7 @@ export interface IAgent {
    * Called once when the battle begins.
    * Use for setup, initial analysis, etc.
    */
-  onBattleStart?(state: BattleStateSnapshot): void;
+  onBattleStart?(state: BattleStateSnapshot): void | Promise<void>;
 
   /**
    * Core method: decide your next action.

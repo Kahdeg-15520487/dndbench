@@ -101,7 +101,7 @@ export class HeuristicAgent implements IAgent {
         type: "cast_spell",
         actorId: this.id,
         targetId: enemy.id,
-        spellId: spell.id,
+      spellId: spell.id as any,
       };
     }
 
@@ -133,7 +133,7 @@ export class HeuristicAgent implements IAgent {
 
   onActionResult(_result: CombatResult): void {}
 
-  onBattleEnd(): void {}
+  onBattleEnd(_winner?: string, _reason?: string): void {}
 
   destroy(): void {}
 }
