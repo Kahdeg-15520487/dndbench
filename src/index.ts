@@ -128,6 +128,8 @@ function createAgent(
       name: charName,
       characterClass: charClass,
       model,
+      apiKey: process.env.LLM_API_KEY || "no-key",
+      baseURL: process.env.LLM_BASE_URL || "http://localhost:8008/v1",
     });
   }
   return new HeuristicAgent(charId, charName);

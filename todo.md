@@ -4,12 +4,13 @@
 
 ## Pending
 
-- [ ] **#1** **[critical]** Design arena architecture and game mechanics
-- [ ] **#2** **[critical]** Implement core RPG engine (stats, combat, status effects, abilities)
+- [ ] **#1** **[critical]** Test LLM agent against a real provider
+- [ ] **#2** **[high]** Fix provider mapping — DB has "openai-compatible" but pi SDK needs known provider names
 - [ ] **#3** **[high]** Implement tool call API layer (actions exposed to LLM agents)
 - [ ] **#4** **[high]** Implement LLM agent controller (two agents take turns via API)
 - [ ] **#5** Create battle runner, logging, and replay system
 - [ ] **#6** Add CLI entry point and example configurations
+- [ ] **#7** Streaming enemy thinking in UI (show LLM observation chain)
 
 <!-- Raw Data -->
 ```json
@@ -17,7 +18,7 @@
   "todos": [
     {
       "id": 1,
-      "text": "Design arena architecture and game mechanics",
+      "text": "Test LLM agent against a real provider",
       "done": false,
       "priority": "critical",
       "tags": [],
@@ -26,9 +27,9 @@
     },
     {
       "id": 2,
-      "text": "Implement core RPG engine (stats, combat, status effects, abilities)",
+      "text": "Fix provider mapping — DB has \"openai-compatible\" but pi SDK needs known provider names",
       "done": false,
-      "priority": "critical",
+      "priority": "high",
       "tags": [],
       "createdAt": 1774946604495,
       "archived": false
@@ -68,8 +69,17 @@
       "tags": [],
       "createdAt": 1774946621062,
       "archived": false
+    },
+    {
+      "id": 7,
+      "text": "Streaming enemy thinking in UI (show LLM observation chain)",
+      "done": false,
+      "priority": "medium",
+      "tags": [],
+      "createdAt": 1775116426915,
+      "archived": false
     }
   ],
-  "nextId": 7
+  "nextId": 8
 }
 ```

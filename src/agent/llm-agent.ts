@@ -26,7 +26,6 @@ import {
   type AgentSession,
   type ResourceLoader,
 } from "@mariozechner/pi-coding-agent";
-import { getModel } from "@mariozechner/pi-ai";
 import { IAgent } from "./interface.js";
 import {
   BattleStateSnapshot,
@@ -100,21 +99,44 @@ export class LLMAgent implements IAgent {
     const enemy = state.characters.find((c) => c.id !== this.id)!;
     this.enemyId = enemy.id;
 
-    // Build pi session
+    // Register arena's own provider from DB config (not ~/.pi/agent/models.json)
+    const providerName = `arena-${this.id}`;
+    const modelId = this.config.model;
+    const baseUrl = this.config.baseURL || "https://api.openai.com/v1";
+    const apiKey = this.config.apiKey || "no-key";
+
+    console.error(`[${this.name}] onBattleStart — ${modelId} @ ${baseUrl}`);
+
     const systemPrompt = this.buildSystemPrompt(me, enemy);
     const authStorage = AuthStorage.create();
 
-    // Set API key if provided
-    const provider = this.resolveProvider();
-    if (this.config.apiKey) {
-      (authStorage as any).setRuntimeApiKey(provider, this.config.apiKey);
-    }
-
-    // ModelRegistry constructor is private in type defs, but works at runtime
     const modelRegistry = new (ModelRegistry as any)(authStorage);
+    (modelRegistry as any).registerProvider(providerName, {
+      baseUrl,
+      api: "openai-completions",
+      apiKey: this.config.apiKey || "no-key",
+      compat: {
+        supportsDeveloperRole: false,
+        supportsReasoningEffort: false,
+      },
+      models: [
+        {
+          id: modelId,
+          name: `${this.name} (${modelId})`,
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 32768,
+          maxTokens: 4096,
+        },
+      ],
+    });
 
-    // Try to find a built-in model, or create a custom one via models.json-like config
-    const model = this.resolveModel(modelRegistry, provider);
+    // Set runtime API key so pi considers this provider "available"
+    (authStorage as any).setRuntimeApiKey(providerName, this.config.apiKey || "no-key");
+
+    const model = modelRegistry.find(providerName, modelId);
+    if (!model) throw new Error(`Model not found: ${providerName}/${modelId}`);
 
     const tools = this.buildTools();
 
@@ -134,6 +156,30 @@ export class LLMAgent implements IAgent {
     });
 
     this.session = session;
+
+    // Buffer streaming text, print summary after each turn
+    let thinkingBuf = "";
+    let toolCalls: string[] = [];
+    session.subscribe((event: any) => {
+      const t = event.type;
+      if (t === "message_update") {
+        const sub = event.assistantMessageEvent;
+        if (sub.type === "thinking_delta") thinkingBuf += sub.delta;
+        if (sub.type === "text_delta") thinkingBuf += sub.delta;
+        if (sub.type === "toolcall_start") toolCalls.push(sub.toolCall?.name || "?");
+      } else if (t === "tool_execution_start") {
+        toolCalls.push(event.toolName);
+      } else if (t === "turn_end") {
+        if (thinkingBuf || toolCalls.length) {
+          const think = thinkingBuf.length > 120 ? thinkingBuf.slice(0, 120) + "…" : thinkingBuf;
+          console.error(`[${this.name}] think: ${think || "(none)"} | tools: ${toolCalls.join(", ")}`);
+        }
+        thinkingBuf = "";
+        toolCalls = [];
+      } else if (t === "agent_end") {
+        console.error(`[${this.name}] done`);
+      }
+    });
   }
 
   async getAction(snapshot: BattleStateSnapshot): Promise<CombatAction> {
@@ -187,49 +233,6 @@ export class LLMAgent implements IAgent {
       this.session = null;
     }
     this.actionResolve = null;
-  }
-
-  // ── Provider / Model Resolution ─────────────────────
-
-  private resolveProvider(): string {
-    if (this.config.provider) return this.config.provider;
-    const base = (this.config.baseURL || "").toLowerCase();
-    if (base.includes("anthropic")) return "anthropic";
-    if (base.includes("groq")) return "groq";
-    if (base.includes("together")) return "together";
-    if (base.includes("google") || base.includes("gemini")) return "google";
-    return "openai";
-  }
-
-  private resolveProviderForAuth(): string {
-    // AuthStorage.setRuntimeApiKey expects known provider names
-    const provider = this.resolveProvider();
-    return provider;
-  }
-
-  private resolveModel(modelRegistry: any, provider: string) {
-    // Try built-in model first
-    const builtIn = getModel(provider as any, this.config.model);
-    if (builtIn) return builtIn;
-
-    // Try registry (includes custom models from models.json)
-    const found = modelRegistry.find(provider, this.config.model);
-    if (found) return found;
-
-    // Fallback: create a synthetic model descriptor
-    // This handles arbitrary OpenAI-compatible APIs (Ollama, LM Studio, etc.)
-    return {
-      id: this.config.model,
-      name: this.config.model,
-      provider,
-      api: "openai-completions",
-      baseUrl: this.config.baseURL || "https://api.openai.com/v1",
-      reasoning: false,
-      input: ["text"] as ("text" | "image")[],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 128000,
-      maxTokens: 2048,
-    } as any;
   }
 
   // ── Tool Definitions ────────────────────────────────
