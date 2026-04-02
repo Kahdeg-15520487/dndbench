@@ -211,12 +211,11 @@ export class LLMAgent implements IAgent {
         });
       } else if (t === "turn_end") {
         if (thinkingBuf || toolCalls.length) {
-          const think = thinkingBuf.length > 120 ? thinkingBuf.slice(0, 120) + "…" : thinkingBuf;
-          console.error(`[${this.name}] think: ${think || "(none)"} | tools: ${toolCalls.join(", ")}`);
+          console.error(`[${this.name}] think: ${thinkingBuf || "(none)"} | tools: ${toolCalls.join(", ")}`);
           if (thinkingBuf.trim()) {
             this.onThinking?.({
               type: "thinking",
-              text: thinkingBuf.trim().slice(0, 200),
+              text: thinkingBuf.trim(),
             });
           }
         }
