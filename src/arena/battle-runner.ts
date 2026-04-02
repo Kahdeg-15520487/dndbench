@@ -18,6 +18,7 @@ import {
   TurnResult,
   BattlePhase,
   CombatResult,
+  ThinkingStep,
 } from "../engine/types.js";
 import {
   resolveAction,
@@ -27,6 +28,7 @@ import {
   determineTurnOrder,
 } from "../engine/index.js";
 import { IAgent } from "../agent/interface.js";
+import { LLMAgent } from "../agent/llm-agent.js";
 
 // ── Battle Events (for frontend rendering) ──────────────
 
@@ -166,6 +168,13 @@ export class BattleRunner {
 
       // ── Ask the agent for its action (the core abstraction) ──
       const action = await agent.getAction(snapshot);
+      
+      // Collect thinking steps from LLM agents
+      let thinkingSteps: ThinkingStep[] | undefined;
+      if (agent instanceof LLMAgent) {
+        thinkingSteps = agent.consumeThinkingSteps();
+      }
+      
       this.emit({ type: "action_chosen", actorId: character.id, action });
 
       // Resolve action in engine
@@ -188,6 +197,7 @@ export class BattleRunner {
         actorId: character.id,
         results: [result],
         stateSnapshot: createSnapshot(this.characters, this.turnNumber, this.finished ? "finished" : "ongoing"),
+        thinkingSteps,
       });
 
       // Check for flee

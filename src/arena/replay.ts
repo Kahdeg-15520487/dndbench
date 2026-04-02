@@ -119,6 +119,25 @@ function renderMarkdown(
         lines.push(hpLine);
       }
 
+      // Thinking steps (LLM reasoning)
+      if (turn.thinkingSteps?.length) {
+        lines.push("");
+        lines.push("<details>");
+        lines.push("<summary>🧠 Thinking process</summary>");
+        lines.push("");
+        for (const step of turn.thinkingSteps) {
+          if (step.type === "tool_call") {
+            lines.push(`- **🔧 ${step.toolName}**`);
+          } else if (step.type === "tool_result") {
+            lines.push(`  - ↳ ${step.text}`);
+          } else if (step.type === "thinking") {
+            lines.push(`- 💭 ${step.text}`);
+          }
+        }
+        lines.push("");
+        lines.push("</details>");
+      }
+
       lines.push("");
     }
   }

@@ -27,6 +27,7 @@ import {
   type ResourceLoader,
 } from "@mariozechner/pi-coding-agent";
 import { IAgent } from "./interface.js";
+import type { ThinkingStep } from "../engine/types.js";
 import {
   BattleStateSnapshot,
   CombatAction,
@@ -34,17 +35,6 @@ import {
 } from "../engine/types.js";
 
 // ── Config ──────────────────────────────────────────────
-
-export interface ThinkingStep {
-  /** What the agent is doing */
-  type: "thinking" | "tool_call" | "tool_result";
-  /** Human-readable summary */
-  text: string;
-  /** Tool name (for tool_call / tool_result) */
-  toolName?: string;
-  /** Tool result summary (for tool_result) */
-  toolResult?: string;
-}
 
 export interface LLMAgentConfig {
   id: string;
@@ -96,8 +86,24 @@ export class LLMAgent implements IAgent {
   private currentSnapshot: BattleStateSnapshot | null = null;
   private enemyId = "";
 
-  // Thinking callback
-  private onThinking?: (step: ThinkingStep) => void;
+  // Thinking step collection per turn
+  private _pendingThinkingSteps: ThinkingStep[] = [];
+
+  /** Callback for streaming thinking steps to UI */
+  onThinking?: (step: ThinkingStep) => void;
+
+  /** Get and clear accumulated thinking steps for the current turn */
+  consumeThinkingSteps(): ThinkingStep[] {
+    const steps = this._pendingThinkingSteps;
+    this._pendingThinkingSteps = [];
+    return steps;
+  }
+
+  /** Emit a thinking step to both the UI callback and internal buffer */
+  private emitThinking(step: ThinkingStep): void {
+    this._pendingThinkingSteps.push(step);
+    this.onThinking?.(step);
+  }
 
   constructor(config: LLMAgentConfig) {
     this.id = config.id;
@@ -190,21 +196,17 @@ export class LLMAgent implements IAgent {
         if (sub.type === "toolcall_start") {
           const name = sub.toolCall?.name || "?";
           toolCalls.push(name);
-          this.onThinking?.({
-            type: "tool_call",
-            text: `Calling ${name}...`,
-            toolName: name,
-          });
+          // Skip emitting — tool_execution_start follows with the real name
         }
       } else if (t === "tool_execution_start") {
         toolCalls.push(event.toolName);
-        this.onThinking?.({
+        this.emitThinking({
           type: "tool_call",
           text: `Using ${event.toolName}...`,
           toolName: event.toolName,
         });
       } else if (t === "tool_execution_end") {
-        this.onThinking?.({
+        this.emitThinking({
           type: "tool_result",
           text: event.isError ? "Error" : "Done",
           toolName: event.toolName,
@@ -213,7 +215,7 @@ export class LLMAgent implements IAgent {
         if (thinkingBuf || toolCalls.length) {
           console.error(`[${this.name}] think: ${thinkingBuf || "(none)"} | tools: ${toolCalls.join(", ")}`);
           if (thinkingBuf.trim()) {
-            this.onThinking?.({
+            this.emitThinking({
               type: "thinking",
               text: thinkingBuf.trim(),
             });
@@ -337,8 +339,8 @@ export class LLMAgent implements IAgent {
       {
         name: "review_spells",
         label: "Review Spells",
-        description: "List your available spells with cooldown status and MP cost.",
-        promptSnippet: "Check which spells are ready and their costs",
+        description: "List your available spells with full details: power, cost, cooldown, status effects.",
+        promptSnippet: "Check which spells are ready and their properties",
         parameters: Type.Object({}),
         execute: async () => {
           const me = this.currentSnapshot!.characters.find((c) => c.id === this.id)!;
@@ -349,10 +351,15 @@ export class LLMAgent implements IAgent {
                 me.spells.map((s) => ({
                   id: s.id,
                   name: s.name,
+                  description: s.description,
                   type: s.type,
+                  target: s.target,
                   mpCost: s.mpCost,
-                  ready: s.currentCooldown === 0,
+                  basePower: s.basePower,
+                  cooldown: s.cooldown,
                   cooldownRemaining: s.currentCooldown,
+                  ready: s.currentCooldown === 0,
+                  statusEffect: s.statusEffect || undefined,
                 })),
                 null,
                 2

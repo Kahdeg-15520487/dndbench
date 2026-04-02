@@ -160,6 +160,14 @@ export interface TurnResult {
   actorId: string;
   results: CombatResult[];
   stateSnapshot: BattleStateSnapshot;
+  thinkingSteps?: ThinkingStep[];
+}
+
+export interface ThinkingStep {
+  type: "thinking" | "tool_call" | "tool_result";
+  text: string;
+  toolName?: string;
+  toolResult?: string;
 }
 
 export interface BattleStateSnapshot {
@@ -172,8 +180,8 @@ export interface BattleStateSnapshot {
     maxMp: number;
     statusEffects: { type: StatusEffectType; turnsRemaining: number }[];
     isDefending: boolean;
-    spells: { id: string; name: string; type: string; mpCost: number; currentCooldown: number }[];
-    inventory: { id: string; name: string; quantity: number }[];
+    spells: { id: string; name: string; type: string; description: string; target: string; mpCost: number; basePower: number; cooldown: number; currentCooldown: number; statusEffect?: { type: string; chance: number; potency: number; duration: number } }[];
+    inventory: { id: string; name: string; description: string; quantity: number; type: string; potency: number }[];
   }[];
   turnNumber: number;
   phase: BattlePhase;

@@ -511,12 +511,17 @@ export function createSnapshot(
         id: s.id,
         name: s.name,
         type: s.type,
+        description: s.description,
+        target: s.target,
         mpCost: s.mpCost,
+        basePower: s.basePower,
+        cooldown: s.cooldown,
         currentCooldown: s.currentCooldown,
+        statusEffect: s.statusEffect,
       })),
       inventory: c.inventory
         .filter((i) => i.quantity > 0)
-        .map((i) => ({ id: i.id, name: i.name, quantity: i.quantity })),
+        .map((i) => ({ id: i.id, name: i.name, description: i.description, quantity: i.quantity, type: i.type, potency: i.potency })),
     })),
     turnNumber,
     phase,
