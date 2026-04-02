@@ -63,7 +63,15 @@ export function createWsRenderer(
       }
 
       case "action_chosen": {
-        // When human submits, this just confirms. The interesting bit is action_result.
+        const isPlayer = event.actorId === playerCharacterId;
+        send("action_chosen", {
+          actorId: event.actorId,
+          action: event.action,
+          actionLabel: formatAction(event.action),
+        });
+        if (isPlayer) {
+          // confirm to player what they chose
+        }
         break;
       }
 
@@ -75,6 +83,7 @@ export function createWsRenderer(
           result: event.result,
           actorId: event.actorId,
           targetId: event.targetId,
+          actionLabel: formatAction(event.result.action),
         });
         break;
       }
@@ -107,6 +116,16 @@ export function createWsRenderer(
       ws.send(JSON.stringify({ type, ...data }));
     }
   }
+}
+
+// ── Helpers ─────────────────────────────────────────────
+
+function formatAction(action: import("../engine/types.js").CombatAction): string {
+  const parts: string[] = [action.type];
+  if (action.spellId) parts.push(`spell="${action.spellId}"`);
+  if (action.itemId) parts.push(`item="${action.itemId}"`);
+  if (action.targetId) parts.push(`target="${action.targetId}"`);
+  return parts.join(" ");
 }
 
 // ── Serialization ──────────────────────────────────────

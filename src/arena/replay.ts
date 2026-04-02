@@ -83,6 +83,10 @@ function renderMarkdown(
       lines.push(`> ${result.narrative}`);
       lines.push("");
 
+      // Action details
+      const act = result.action;
+      lines.push(`- **Action**: ${formatAction(act)}`);
+
       // Damage / heal details
       if (result.damage) {
         const d = result.damage;
@@ -160,6 +164,14 @@ function buildPath(
   const names = characters.map((c) => `${c.name}-${c.class}`).join("_vs_");
   const filename = `${ts}_${names}.md`;
   return path.resolve(dir, filename);
+}
+
+function formatAction(action: import("../engine/types.js").CombatAction): string {
+  const parts: string[] = [action.type];
+  if (action.spellId) parts.push(`spell="${action.spellId}"`);
+  if (action.itemId) parts.push(`item="${action.itemId}"`);
+  if (action.targetId) parts.push(`target="${action.targetId}"`);
+  return parts.join(" ");
 }
 
 function hpBar(hp: number, maxHp: number): string {

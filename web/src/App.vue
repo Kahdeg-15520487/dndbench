@@ -129,6 +129,10 @@ function handleServerMessage(msg: any) {
       updateState(msg.state);
       break;
 
+    case "action_chosen":
+      addMessage("system", `→ ${msg.actionLabel || formatAction(msg.action)}`);
+      break;
+
     case "action_result":
       myTurn.value = false;
       addMessage("player", msg.narrative);
@@ -211,6 +215,15 @@ function startBattle(config: { name: string; charClass: string; enemyMode: strin
 function sendAction(action: { type: string; spellId?: string; itemId?: string; target?: string }) {
   myTurn.value = false;
   send({ type: "action", action });
+}
+
+function formatAction(action: any): string {
+  if (!action) return "?";
+  const parts = [action.type];
+  if (action.spellId) parts.push(`spell="${action.spellId}"`);
+  if (action.itemId) parts.push(`item="${action.itemId}"`);
+  if (action.targetId) parts.push(`target="${action.targetId}"`);
+  return parts.join(" ");
 }
 
 function resetGame() {

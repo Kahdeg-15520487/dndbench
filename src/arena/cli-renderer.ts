@@ -33,6 +33,10 @@ export function createCliRenderer(
         break;
       }
 
+      case "action_chosen":
+        printActionChosen(event.action);
+        break;
+
       case "action_result":
         printActionResult(event.result);
         break;
@@ -85,6 +89,10 @@ function printBattleStart(characters: Character[], agentMap: Map<string, IAgent>
   console.log("─".repeat(60) + "\n");
 }
 
+function printActionChosen(action: import("../engine/types.js").CombatAction): void {
+  console.log(chalk.cyan(`  → Chose: ${formatAction(action)}`));
+}
+
 function printActionResult(result: import("../engine/types.js").CombatResult): void {
   console.log(`  ${result.narrative}`);
   if (result.damage && result.damage.damage > 0) {
@@ -116,6 +124,16 @@ function printHealthBars(characters: Character[]): void {
     );
   }
   console.log();
+}
+
+// ── Helpers ─────────────────────────────────────────────
+
+function formatAction(action: import("../engine/types.js").CombatAction): string {
+  const parts: string[] = [action.type];
+  if (action.spellId) parts.push(`spell="${action.spellId}"`);
+  if (action.itemId) parts.push(`item="${action.itemId}"`);
+  if (action.targetId) parts.push(`target="${action.targetId}"`);
+  return parts.join(" ");
 }
 
 // ── Summary (called after run()) ────────────────────────
