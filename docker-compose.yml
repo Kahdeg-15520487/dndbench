@@ -1,16 +1,33 @@
-version: "3.8"
 services:
   db:
     image: postgres:16-alpine
     container_name: arena01-db
-    ports:
-      - "5432:5432"
+    restart: unless-stopped
     environment:
       POSTGRES_USER: arena
       POSTGRES_PASSWORD: arena
       POSTGRES_DB: arena01
     volumes:
       - arena01-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arena -d arena01"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    container_name: arena01-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://arena:arena@db:5432/arena01
+      NODE_ENV: production
+      PORT: "3000"
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   arena01-pgdata:
