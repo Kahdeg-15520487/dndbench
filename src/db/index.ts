@@ -1,5 +1,7 @@
 // ─────────────────────────────────────────────────────────
 //  Database — PostgreSQL connection, auto-migration, queries
+//
+//  Falls back to in-memory storage if Postgres is unavailable.
 // ─────────────────────────────────────────────────────────
 
 import pg from "pg";
@@ -11,38 +13,56 @@ const DATABASE_URL =
   process.env.DATABASE_URL ||
   "postgresql://arena:arena@localhost:5432/arena01";
 
-const pool = new Pool({ connectionString: DATABASE_URL });
+let pool: pg.Pool | null = null;
+let dbAvailable = false;
+
+// ── In-memory fallback ──────────────────────────────────
+
+let memConfigs: (LLMConfig & { id: number })[] = [];
+let memBattleLogs: BattleLogRow[] = [];
+let memNextConfigId = 1;
+let memNextLogId = 1;
 
 // ── Auto-Migrate ────────────────────────────────────────
 
 export async function migrate(): Promise<void> {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS llm_configs (
-      id          SERIAL PRIMARY KEY,
-      name        TEXT    NOT NULL UNIQUE,
-      provider    TEXT    NOT NULL DEFAULT 'openai-compatible',
-      model       TEXT    NOT NULL,
-      api_key     TEXT,
-      base_url    TEXT,
-      is_default  BOOLEAN NOT NULL DEFAULT false,
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
+  try {
+    pool = new Pool({ connectionString: DATABASE_URL });
+    await pool.query("SELECT 1");
+    dbAvailable = true;
 
-    CREATE TABLE IF NOT EXISTS battle_logs (
-      id          SERIAL PRIMARY KEY,
-      player_name TEXT,
-      player_class TEXT,
-      enemy_class  TEXT,
-      enemy_mode   TEXT    NOT NULL DEFAULT 'mock',
-      winner       TEXT,
-      turns        INT,
-      duration_ms  INT,
-      log_json     JSONB,
-      created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-  `);
-  console.log(`  DB migrated ✓`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS llm_configs (
+        id          SERIAL PRIMARY KEY,
+        name        TEXT    NOT NULL UNIQUE,
+        provider    TEXT    NOT NULL DEFAULT 'openai-compatible',
+        model       TEXT    NOT NULL,
+        api_key     TEXT,
+        base_url    TEXT,
+        is_default  BOOLEAN NOT NULL DEFAULT false,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
+      CREATE TABLE IF NOT EXISTS battle_logs (
+        id          SERIAL PRIMARY KEY,
+        player_name TEXT,
+        player_class TEXT,
+        enemy_class  TEXT,
+        enemy_mode   TEXT    NOT NULL DEFAULT 'mock',
+        winner       TEXT,
+        turns        INT,
+        duration_ms  INT,
+        log_json     JSONB,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+    console.log(`  DB migrated ✓`);
+  } catch (err: any) {
+    dbAvailable = false;
+    pool = null;
+    console.log(`  DB unavailable (${err.code || err.message}), using in-memory storage`);
+  }
 }
 
 // ── Types ───────────────────────────────────────────────
@@ -75,7 +95,10 @@ export interface BattleLogRow {
 // ── LLM Config CRUD ────────────────────────────────────
 
 export async function listLLMConfigs(): Promise<LLMConfig[]> {
-  const { rows } = await pool.query(
+  if (!dbAvailable) {
+    return memConfigs.map(({ apiKey, ...rest }) => rest);
+  }
+  const { rows } = await pool!.query(
     `SELECT id, name, provider, model, api_key, base_url, is_default, created_at, updated_at
      FROM llm_configs ORDER BY is_default DESC, name`
   );
@@ -93,7 +116,13 @@ export async function listLLMConfigs(): Promise<LLMConfig[]> {
 }
 
 export async function getLLMConfig(id: number): Promise<LLMConfig | null> {
-  const { rows } = await pool.query(
+  if (!dbAvailable) {
+    const c = memConfigs.find(c => c.id === id);
+    if (!c) return null;
+    const { apiKey, ...rest } = c;
+    return rest;
+  }
+  const { rows } = await pool!.query(
     `SELECT id, name, provider, model, api_key, base_url, is_default, created_at, updated_at
      FROM llm_configs WHERE id = $1`,
     [id]
@@ -114,7 +143,13 @@ export async function getLLMConfig(id: number): Promise<LLMConfig | null> {
 }
 
 export async function getDefaultLLMConfig(): Promise<LLMConfig | null> {
-  const { rows } = await pool.query(
+  if (!dbAvailable) {
+    const c = memConfigs.find(c => c.isDefault);
+    if (!c) return memConfigs[0] || null;
+    const { apiKey, ...rest } = c;
+    return rest;
+  }
+  const { rows } = await pool!.query(
     `SELECT id, name, provider, model, api_key, base_url, is_default, created_at, updated_at
      FROM llm_configs WHERE is_default = true LIMIT 1`
   );
@@ -143,12 +178,31 @@ export interface CreateLLMConfigInput {
 }
 
 export async function createLLMConfig(input: CreateLLMConfigInput): Promise<LLMConfig> {
+  if (!dbAvailable) {
+    if (input.isDefault) {
+      memConfigs.forEach(c => c.isDefault = false);
+    }
+    const c: LLMConfig & { id: number } = {
+      id: memNextConfigId++,
+      name: input.name,
+      provider: input.provider || "openai-compatible",
+      model: input.model,
+      apiKey: input.apiKey || null,
+      baseUrl: input.baseUrl || null,
+      isDefault: input.isDefault ?? false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    memConfigs.push(c);
+    const { apiKey, ...rest } = c;
+    return rest;
+  }
   // If this is set as default, clear other defaults first
   if (input.isDefault) {
-    await pool.query(`UPDATE llm_configs SET is_default = false`);
+    await pool!.query(`UPDATE llm_configs SET is_default = false`);
   }
 
-  const { rows } = await pool.query(
+  const { rows } = await pool!.query(
     `INSERT INTO llm_configs (name, provider, model, api_key, base_url, is_default)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id, name, provider, model, api_key, base_url, is_default, created_at, updated_at`,
@@ -179,9 +233,26 @@ export async function updateLLMConfig(
   id: number,
   input: Partial<CreateLLMConfigInput>
 ): Promise<LLMConfig | null> {
+  if (!dbAvailable) {
+    const idx = memConfigs.findIndex(c => c.id === id);
+    if (idx === -1) return null;
+    const c = memConfigs[idx];
+    if (input.isDefault) {
+      memConfigs.forEach(c => c.isDefault = false);
+    }
+    if (input.name !== undefined) c.name = input.name;
+    if (input.provider !== undefined) c.provider = input.provider;
+    if (input.model !== undefined) c.model = input.model;
+    if (input.apiKey !== undefined) c.apiKey = input.apiKey;
+    if (input.baseUrl !== undefined) c.baseUrl = input.baseUrl;
+    if (input.isDefault !== undefined) c.isDefault = input.isDefault;
+    c.updatedAt = new Date();
+    const { apiKey, ...rest } = c;
+    return rest;
+  }
   // If setting as default, clear others
   if (input.isDefault) {
-    await pool.query(`UPDATE llm_configs SET is_default = false`);
+    await pool!.query(`UPDATE llm_configs SET is_default = false`);
   }
 
   const sets: string[] = [];
@@ -207,7 +278,7 @@ export async function updateLLMConfig(
   sets.push(`updated_at = now()`);
   vals.push(id);
 
-  const { rows } = await pool.query(
+  const { rows } = await pool!.query(
     `UPDATE llm_configs SET ${sets.join(", ")} WHERE id = $${vals.length}
      RETURNING id, name, provider, model, api_key, base_url, is_default, created_at, updated_at`,
     vals
@@ -228,7 +299,13 @@ export async function updateLLMConfig(
 }
 
 export async function deleteLLMConfig(id: number): Promise<boolean> {
-  const { rowCount } = await pool.query(`DELETE FROM llm_configs WHERE id = $1`, [id]);
+  if (!dbAvailable) {
+    const idx = memConfigs.findIndex(c => c.id === id);
+    if (idx === -1) return false;
+    memConfigs.splice(idx, 1);
+    return true;
+  }
+  const { rowCount } = await pool!.query(`DELETE FROM llm_configs WHERE id = $1`, [id]);
   return (rowCount ?? 0) > 0;
 }
 
@@ -244,7 +321,23 @@ export async function saveBattleLog(log: {
   durationMs?: number;
   logJson?: any;
 }): Promise<number> {
-  const { rows } = await pool.query(
+  if (!dbAvailable) {
+    const id = memNextLogId++;
+    memBattleLogs.push({
+      id,
+      playerName: log.playerName ?? null,
+      playerClass: log.playerClass ?? null,
+      enemyClass: log.enemyClass ?? null,
+      enemyMode: log.enemyMode,
+      winner: log.winner ?? null,
+      turns: log.turns ?? null,
+      durationMs: log.durationMs ?? null,
+      logJson: log.logJson,
+      createdAt: new Date(),
+    });
+    return id;
+  }
+  const { rows } = await pool!.query(
     `INSERT INTO battle_logs (player_name, player_class, enemy_class, enemy_mode, winner, turns, duration_ms, log_json)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      RETURNING id`,
@@ -254,7 +347,10 @@ export async function saveBattleLog(log: {
 }
 
 export async function listBattleLogs(limit = 50): Promise<BattleLogRow[]> {
-  const { rows } = await pool.query(
+  if (!dbAvailable) {
+    return memBattleLogs.slice(-limit).reverse();
+  }
+  const { rows } = await pool!.query(
     `SELECT id, player_name, player_class, enemy_class, enemy_mode, winner, turns, duration_ms, log_json, created_at
      FROM battle_logs ORDER BY created_at DESC LIMIT $1`,
     [limit]
@@ -276,5 +372,5 @@ export async function listBattleLogs(limit = 50): Promise<BattleLogRow[]> {
 // ── Pool shutdown ──────────────────────────────────────
 
 export async function closeDb(): Promise<void> {
-  await pool.end();
+  if (pool) await pool.end();
 }
