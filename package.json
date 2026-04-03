@@ -10,9 +10,10 @@
     "battle:llm": "tsx src/index.ts --mode llm",
     "battle:mixed": "tsx src/index.ts --mode mixed",
     "test": "tsx src/index.ts --mode mock --delay 0 --max-turns 10 --quiet",
+    "dev:db": "docker compose up -d db && docker compose exec db sh -c 'until pg_isready -U arena -d arena01; do sleep 1; done'",
     "dev:server": "tsx src/server.ts",
     "dev:client": "vite web/",
-    "dev": "concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
+    "dev": "npm run dev:db && concurrently -n server,client -c blue,green \"npm run dev:server\" \"npm run dev:client\"",
     "build:web": "vite build web/",
     "web": "npm run build:web && NODE_ENV=production tsx src/server.ts"
   },
