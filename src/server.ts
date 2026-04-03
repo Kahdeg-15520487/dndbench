@@ -31,6 +31,15 @@ const PORT = parseInt(process.env.PORT || "") || (isDev ? 3001 : 3000);
 const app = express();
 app.use(express.json());
 
+// CORS for dev mode (Vite on :3000 → API on :3001)
+app.use((_req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (_req.method === "OPTIONS") { res.sendStatus(204); return; }
+  next();
+});
+
 const server = createServer(app);
 
 // ── REST API: LLM Configs ───────────────────────────────
