@@ -11,12 +11,14 @@ const emit = defineEmits<{
     charClass: string;
     enemyMode: string;
     llmConfigId?: number;
+    gameCategory: "1v1" | "boss_exam";
   }];
 }>();
 
 const name = ref("Hero");
 const charClass = ref("warrior");
 const enemyMode = ref("mock");
+const gameCategory = ref<"1v1" | "boss_exam">("1v1");
 const selectedLlmConfigId = ref<number | null>(null);
 
 // LLM configs from DB
@@ -156,7 +158,7 @@ async function deleteConfig(id: number) {
 
 const canStart = computed(() => {
   if (!props.connected) return false;
-  if (enemyMode.value === "llm" && !selectedLlmConfigId.value && llmConfigs.value.length === 0) return false;
+  if (gameCategory.value === "1v1" && enemyMode.value === "llm" && !selectedLlmConfigId.value && llmConfigs.value.length === 0) return false;
   return true;
 });
 
@@ -165,6 +167,7 @@ function onStart() {
     name: name.value || "Hero",
     charClass: charClass.value,
     enemyMode: enemyMode.value,
+    gameCategory: gameCategory.value,
     ...(enemyMode.value === "llm" && selectedLlmConfigId.value
       ? { llmConfigId: selectedLlmConfigId.value }
       : {}),
@@ -177,6 +180,33 @@ function onStart() {
     <div class="setup-card">
       <h1>⚔️ RPG Arena</h1>
       <p class="subtitle">Battle an AI opponent in turn-based combat</p>
+
+      <!-- ── Game Category ─────────────────────────── -->
+      <div class="form-group">
+        <label>Game Mode</label>
+        <div class="category-toggle">
+          <button
+            class="btn"
+            :class="{ active: gameCategory === '1v1' }"
+            @click="gameCategory = '1v1'"
+          >
+            ⚔️ 1v1 Arena
+          </button>
+          <button
+            class="btn"
+            :class="{ active: gameCategory === 'boss_exam' }"
+            @click="gameCategory = 'boss_exam'"
+          >
+            👹 Boss Exam
+          </button>
+        </div>
+        <p class="hint" v-if="gameCategory === '1v1'">
+          Classic duel — fight a random class AI opponent.
+        </p>
+        <p class="hint" v-if="gameCategory === 'boss_exam'">
+          Fight 5 bosses of increasing difficulty. Fresh HP each fight. Graded at the end.
+        </p>
+      </div>
 
       <!-- ── Name ─────────────────────────────────── -->
       <div class="form-group">
@@ -211,7 +241,7 @@ function onStart() {
       </div>
 
       <!-- ── Enemy Mode ───────────────────────────── -->
-      <div class="form-group">
+      <div class="form-group" v-if="gameCategory === '1v1'">
         <label>Enemy Mode</label>
         <div class="mode-toggle">
           <button
@@ -302,7 +332,9 @@ function onStart() {
       </div>
 
       <button class="btn-accent start-btn" :disabled="!canStart" @click="onStart">
-        {{ connected ? '⚔️ Start Battle' : 'Connecting...' }}
+        {{ connected
+          ? gameCategory === 'boss_exam' ? '👹 Start Boss Exam' : '⚔️ Start Battle'
+          : 'Connecting...' }}
       </button>
     </div>
   </div>
@@ -396,6 +428,20 @@ input:focus {
 .class-name { font-weight: 700; font-size: 14px; color: var(--class-color); }
 .class-desc { font-size: 11px; color: var(--text-dim); margin: 2px 0; }
 .class-stats { font-size: 10px; color: var(--text-dim); font-family: monospace; }
+
+/* ── Category Toggle ────────────────────────────────── */
+.category-toggle {
+  display: flex;
+  gap: 8px;
+}
+.category-toggle .btn {
+  flex: 1;
+}
+.category-toggle .btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
 
 /* ── Mode Toggle ────────────────────────────────────── */
 .mode-toggle {

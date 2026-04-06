@@ -6,3 +6,9 @@ export {
   createSnapshot,
   determineTurnOrder,
 } from "./combat.js";
+export {
+  createBoss,
+  getBossProfile,
+  getAllBossProfiles,
+  BOSS_RUSH_ORDER,
+} from "./bosses.js";

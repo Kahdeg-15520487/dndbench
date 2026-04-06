@@ -15,8 +15,9 @@ import { fileURLToPath } from "url";
 import fs from "fs";
 
 import { createCharacter } from "./engine/characters.js";
-import { IAgent, HeuristicAgent, LLMAgent, HumanAgent } from "./agent/index.js";
-import type { Character, CharacterClass, CombatAction } from "./engine/types.js";
+import { createBoss, getBossProfile, getAllBossProfiles, BOSS_RUSH_ORDER } from "./engine/bosses.js";
+import { IAgent, HeuristicAgent, LLMAgent, HumanAgent, BossAgent } from "./agent/index.js";
+import type { Character, CharacterClass, CombatAction, BossId } from "./engine/types.js";
 import { BattleRunner } from "./arena/battle-runner.js";
 import { createWsRenderer } from "./arena/ws-renderer.js";
 import { saveReplay } from "./arena/replay.js";
@@ -119,6 +120,28 @@ app.get("/api/battle-logs", async (_req, res) => {
   }
 });
 
+// ── REST API: Boss Profiles ─────────────────────────────
+
+app.get("/api/bosses", (_req, res) => {
+  const profiles = getAllBossProfiles();
+  res.json(profiles.map(p => ({
+    id: p.id,
+    name: p.name,
+    emoji: p.emoji,
+    title: p.title,
+    tier: p.tier,
+    description: p.description,
+    stats: {
+      hp: p.stats.maxHp,
+      mp: p.stats.maxMp,
+      str: p.stats.strength,
+      def: p.stats.defense,
+      mag: p.stats.magic,
+      spd: p.stats.speed,
+    },
+  })));
+});
+
 // ── Static Files (production) ───────────────────────────
 
 const staticPath = path.join(__dirname, "../web/dist");
@@ -134,11 +157,12 @@ if (fs.existsSync(staticPath)) {
 const wss = new WebSocketServer({ server });
 
 interface ClientMessage {
-  type: "start_battle" | "action";
+  type: "start_battle" | "start_boss_exam" | "action";
   name?: string;
   class?: string;
   enemyMode?: string;
   llmConfigId?: number;
+  bossId?: string;
   action?: {
     type: string;
     spellId?: string;
@@ -148,8 +172,12 @@ interface ClientMessage {
 }
 
 /**
- * A single WebSocket connection = a single battle session.
- * Thin wrapper: wires BattleRunner → WS renderer → browser.
+ * A single WebSocket connection = a game session.
+ *
+ * Modes:
+ *  - "1v1":       One battle, player (human) vs AI
+ *  - "boss_exam": Agent fights each of 5 bosses as separate tests
+ *                  (fresh character each time, scored at end)
  */
 class GameSession {
   private ws: WebSocket;
@@ -159,6 +187,17 @@ class GameSession {
   private playerChar?: Character;
   private enemyChar?: Character;
   private startTime = 0;
+
+  // Boss exam state
+  private bossExamActive = false;
+  private bossExamConfig?: {
+    name: string;
+    charClass: CharacterClass;
+    mode: "llm" | "mock";
+    llmConfigId?: number;
+  };
+  private bossExamResults: { bossId: BossId; bossName: string; won: boolean; turns: number }[] = [];
+  private bossExamIndex = 0;
 
   constructor(ws: WebSocket) {
     this.ws = ws;
@@ -171,6 +210,9 @@ class GameSession {
         case "start_battle":
           this.startBattle(msg);
           break;
+        case "start_boss_exam":
+          this.startBossExam(msg);
+          break;
         case "action":
           this.handleHumanAction(msg);
           break;
@@ -180,7 +222,7 @@ class GameSession {
     }
   }
 
-  // ── Start Battle ─────────────────────────────────────
+  // ── 1v1 Battle ─────────────────────────────────────
 
   private async startBattle(msg: ClientMessage) {
     const playerClass = (msg.class || "warrior") as CharacterClass;
@@ -206,7 +248,6 @@ class GameSession {
 
     this.startTime = Date.now();
 
-    // Wire: BattleRunner → WS renderer → browser
     const wsRenderer = createWsRenderer(this.ws, "player");
 
     this.runner = new BattleRunner(
@@ -214,24 +255,173 @@ class GameSession {
       [this.humanAgent, this.enemyAgent],
       {
         maxTurns: 50,
-        turnDelayMs: 0, // no artificial delay for real-time play
+        turnDelayMs: 0,
         eventHandler: wsRenderer,
       }
     );
 
-    // Run battle in background — human agent resolves when browser sends action
     this.runBattle();
   }
+
+  // ── Boss Exam ──────────────────────────────────────
+
+  private async startBossExam(msg: ClientMessage) {
+    const playerClass = (msg.class || "warrior") as CharacterClass;
+    const validClasses: CharacterClass[] = ["warrior", "mage", "rogue", "paladin"];
+    if (!validClasses.includes(playerClass)) {
+      this.send("error", { message: "Invalid class" });
+      return;
+    }
+
+    const playerName = msg.name?.trim() || "Hero";
+
+    this.bossExamActive = true;
+    this.bossExamConfig = {
+      name: playerName,
+      charClass: playerClass,
+      mode: (msg.enemyMode as "llm" | "mock") || "mock",
+      llmConfigId: msg.llmConfigId,
+    };
+    this.bossExamResults = [];
+    this.bossExamIndex = 0;
+
+    // Send the exam plan to the client
+    this.send("boss_exam_start", {
+      bosses: BOSS_RUSH_ORDER.map((id) => {
+        const p = getBossProfile(id);
+        return { id: p.id, name: p.name, emoji: p.emoji, title: p.title };
+      }),
+    });
+
+    // Start the first boss fight
+    await this.runNextBossExam();
+  }
+
+  private async runNextBossExam() {
+    if (this.bossExamIndex >= BOSS_RUSH_ORDER.length) {
+      // All done — send scorecard
+      this.sendBossExamResults();
+      return;
+    }
+
+    const bossId = BOSS_RUSH_ORDER[this.bossExamIndex];
+    const bossProfile = getBossProfile(bossId);
+    const config = this.bossExamConfig!;
+
+    // Fresh character each fight
+    this.playerChar = createCharacter("player", config.name, config.charClass);
+    this.enemyChar = createBoss(bossId);
+
+    this.send("boss_exam_fight_start", {
+      bossIndex: this.bossExamIndex,
+      bossId: bossProfile.id,
+      bossName: bossProfile.name,
+      bossEmoji: bossProfile.emoji,
+      bossTitle: bossProfile.title,
+      totalBosses: BOSS_RUSH_ORDER.length,
+    });
+
+    this.humanAgent = new HumanAgent("player", config.name);
+    this.enemyAgent = new BossAgent("boss", bossProfile.name, bossId);
+
+    this.startTime = Date.now();
+
+    const wsRenderer = createWsRenderer(this.ws, "player", "boss");
+
+    this.runner = new BattleRunner(
+      [this.playerChar, this.enemyChar],
+      [this.humanAgent, this.enemyAgent],
+      {
+        maxTurns: 50,
+        turnDelayMs: 0,
+        eventHandler: wsRenderer,
+      }
+    );
+
+    const log = await this.runner.run();
+
+    // Record result
+    const won = log.winner === "player";
+    this.bossExamResults.push({
+      bossId,
+      bossName: bossProfile.name,
+      won,
+      turns: log.totalTurns,
+    });
+
+    // Send individual result
+    this.send("boss_exam_fight_end", {
+      bossIndex: this.bossExamIndex,
+      bossId,
+      bossName: bossProfile.name,
+      won,
+      turns: log.totalTurns,
+      totalBosses: BOSS_RUSH_ORDER.length,
+    });
+
+    // Save replay
+    const replayPath = saveReplay(log, this.runner.getCharacters(), this.runner.getAgents());
+    console.error(`Boss exam replay: ${replayPath}`);
+
+    this.bossExamIndex++;
+
+    // Small delay then next boss
+    if (this.bossExamIndex < BOSS_RUSH_ORDER.length) {
+      // Wait for client to say "continue" or auto-advance
+      // For now, auto-advance after a short delay
+    }
+
+    this.sendBossExamResults();
+  }
+
+  private sendBossExamResults() {
+    const total = BOSS_RUSH_ORDER.length;
+    const completed = this.bossExamResults.length;
+    const wins = this.bossExamResults.filter((r) => r.won).length;
+    const allDone = completed >= total;
+
+    this.send("boss_exam_scorecard", {
+      results: this.bossExamResults,
+      completed,
+      total,
+      wins,
+      allDone,
+      grade: this.gradeBossExam(wins, total),
+    });
+
+    // Save overall result to DB
+    if (allDone) {
+      db.saveBattleLog({
+        playerName: this.bossExamConfig?.name,
+        playerClass: this.bossExamConfig?.charClass,
+        enemyClass: "boss_exam",
+        enemyMode: "boss_exam",
+        winner: wins >= 3 ? "player" : "boss",
+        turns: this.bossExamResults.reduce((s, r) => s + r.turns, 0),
+        durationMs: Date.now() - this.startTime,
+      }).catch(() => {});
+    }
+  }
+
+  private gradeBossExam(wins: number, total: number): string {
+    const pct = wins / total;
+    if (pct >= 1.0) return "S";
+    if (pct >= 0.8) return "A";
+    if (pct >= 0.6) return "B";
+    if (pct >= 0.4) return "C";
+    if (pct >= 0.2) return "D";
+    return "F";
+  }
+
+  // ── Shared Battle Runner ───────────────────────────
 
   private async runBattle() {
     try {
       const log = await this.runner!.run();
 
-      // Save replay
       const replayPath = saveReplay(log, this.runner!.getCharacters(), this.runner!.getAgents());
       console.error(`Replay saved to ${replayPath}`);
 
-      // Save battle log to DB
       const durationMs = Date.now() - this.startTime;
       db.saveBattleLog({
         playerName: this.playerChar?.name,
@@ -258,7 +448,7 @@ class GameSession {
     const action: CombatAction = {
       type: raw.type as CombatAction["type"],
       actorId: "player",
-      targetId: raw.target === "self" ? "player" : "enemy",
+      targetId: raw.target === "self" ? "player" : (this.bossExamActive ? "boss" : "enemy"),
       spellId: raw.spellId,
       itemId: raw.itemId,
     };

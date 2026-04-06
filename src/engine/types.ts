@@ -90,6 +90,13 @@ export interface Character {
 
 export type CharacterClass = "warrior" | "mage" | "rogue" | "paladin";
 
+export type BossId =
+  | "goblin_king"
+  | "dark_wizard"
+  | "ancient_dragon"
+  | "lich_lord"
+  | "demon_lord";
+
 // ─────────────────────────────────────────────────────────
 //  Combat Types
 // ─────────────────────────────────────────────────────────

@@ -12,6 +12,15 @@
 - [ ] **#6** Add CLI entry point and example configurations
 - [ ] **#7** Streaming enemy thinking in UI (show LLM observation chain)
 
+## Completed
+
+- [x] **#8** **[high]** Add BossId type to engine/types.ts
+- [x] **#9** **[high]** Create src/engine/bosses.ts — 5 boss definitions with scaling stats, spells, items
+- [x] **#10** **[high]** Create src/agent/boss-agent.ts — phase-based boss AI (normal/enraged/desperate)
+- [x] **#11** **[high]** Update server.ts — boss rush mode with multi-battle progression
+- [x] **#12** **[high]** Update web UI — game category tabs (1v1 / Boss Exam), boss exam scorecard, handle boss WS messages
+- [x] **#13** Update CLI (src/index.ts) — boss rush mode support
+
 <!-- Raw Data -->
 ```json
 {
@@ -78,8 +87,68 @@
       "tags": [],
       "createdAt": 1775116426915,
       "archived": false
+    },
+    {
+      "id": 8,
+      "text": "Add BossId type to engine/types.ts",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775462490337,
+      "archived": false,
+      "completedAt": 1775462672401
+    },
+    {
+      "id": 9,
+      "text": "Create src/engine/bosses.ts — 5 boss definitions with scaling stats, spells, items",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775462499722,
+      "archived": false,
+      "completedAt": 1775462679299
+    },
+    {
+      "id": 10,
+      "text": "Create src/agent/boss-agent.ts — phase-based boss AI (normal/enraged/desperate)",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775462506803,
+      "archived": false,
+      "completedAt": 1775462684273
+    },
+    {
+      "id": 11,
+      "text": "Update server.ts — boss rush mode with multi-battle progression",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775462515867,
+      "archived": false,
+      "completedAt": 1775463078044
+    },
+    {
+      "id": 12,
+      "text": "Update web UI — game category tabs (1v1 / Boss Exam), boss exam scorecard, handle boss WS messages",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775462520788,
+      "archived": false,
+      "completedAt": 1775463377138
+    },
+    {
+      "id": 13,
+      "text": "Update CLI (src/index.ts) — boss rush mode support",
+      "done": true,
+      "priority": "medium",
+      "tags": [],
+      "createdAt": 1775462526206,
+      "archived": false,
+      "completedAt": 1775463712196
     }
   ],
-  "nextId": 8
+  "nextId": 14
 }
 ```

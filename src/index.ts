@@ -8,7 +8,8 @@
 // ─────────────────────────────────────────────────────────
 
 import { createCharacter } from "./engine/characters.js";
-import { HeuristicAgent, LLMAgent } from "./agent/index.js";
+import { createBoss, getBossProfile, getAllBossProfiles, BOSS_RUSH_ORDER } from "./engine/bosses.js";
+import { HeuristicAgent, LLMAgent, BossAgent } from "./agent/index.js";
 import type { IAgent } from "./agent/index.js";
 import { BattleRunner } from "./arena/battle-runner.js";
 import { createCliRenderer, printBattleSummary } from "./arena/cli-renderer.js";
@@ -32,6 +33,7 @@ interface CliOptions {
   maxTurns: number;
   delay: number;
   outputFile?: string;
+  bossExam: boolean;
 }
 
 function parseArgs(args: string[]): CliOptions {
@@ -45,6 +47,7 @@ function parseArgs(args: string[]): CliOptions {
     mode: "mock",
     maxTurns: 30,
     delay: 1500,
+    bossExam: false,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -60,6 +63,7 @@ function parseArgs(args: string[]): CliOptions {
       case "--max-turns": opts.maxTurns = parseInt(args[++i]); break;
       case "--delay": opts.delay = parseInt(args[++i]); break;
       case "--output": case "-o": opts.outputFile = args[++i]; break;
+      case "--boss-exam": opts.bossExam = true; break;
       case "--help": case "-h":
         printHelp();
         process.exit(0);
@@ -88,6 +92,7 @@ Options:
   --a2-name <name>      Agent 2 name (default: Beta)
   --a2-model <model>    Agent 2 LLM model (default: gpt-4o-mini)
   --mode <mode>         Battle mode (default: mock)
+  --boss-exam           Boss Exam mode: fight all 5 bosses, graded at end
   --max-turns <n>       Maximum turns before draw (default: 30)
   --delay <ms>          Delay between turns in ms (default: 1500)
   --output, -o <file>   Save battle log to JSON file
@@ -142,6 +147,103 @@ function createAgent(
 async function main() {
   const opts = parseArgs(args);
 
+  if (opts.bossExam) {
+    await runBossExam(opts);
+  } else {
+    await run1v1(opts);
+  }
+}
+
+// ── Boss Exam ──────────────────────────────────────────
+
+async function runBossExam(opts: CliOptions) {
+  const validClasses = ["warrior", "mage", "rogue", "paladin"];
+  if (!validClasses.includes(opts.agent1Class)) {
+    console.error(chalk.red("Invalid class. Choose from: warrior, mage, rogue, paladin"));
+    process.exit(1);
+  }
+
+  const agentMode = opts.mode === "mock" ? "mock" : "llm";
+  const results: { bossName: string; won: boolean; turns: number }[] = [];
+
+  console.log(chalk.bold.cyan("\n👹 BOSS EXAM — Fight 5 bosses of increasing difficulty!\n"));
+  console.log(`  Agent: ${opts.agent1Name} (${opts.agent1Class}) [${agentMode === 'llm' ? '🧠 LLM' : '🤖 Mock'}]`);
+  console.log(chalk.dim(`  ${"─".repeat(50)}\n`));
+
+  for (let i = 0; i < BOSS_RUSH_ORDER.length; i++) {
+    const bossId = BOSS_RUSH_ORDER[i];
+    const bossProfile = getBossProfile(bossId);
+
+    console.log(chalk.bold.yellow(`━━━ Boss ${i + 1}/${BOSS_RUSH_ORDER.length}: ${bossProfile.emoji} ${bossProfile.name} — ${bossProfile.title} ━━━`));
+    console.log(chalk.dim(`  HP:${bossProfile.stats.maxHp} MP:${bossProfile.stats.maxMp} STR:${bossProfile.stats.strength} DEF:${bossProfile.stats.defense} MAG:${bossProfile.stats.magic} SPD:${bossProfile.stats.speed}`));
+    console.log();
+
+    // Fresh character each fight
+    const playerChar = createCharacter("agent1", opts.agent1Name, opts.agent1Class as any);
+    const bossChar = createBoss(bossId);
+
+    const agent1 = createAgent(agentMode, playerChar.id, playerChar.name, playerChar.class, opts.agent1Model);
+    const bossAgent = new BossAgent("boss", bossProfile.name, bossId);
+
+    const agentMap = new Map<string, IAgent>([
+      [playerChar.id, agent1],
+      [bossChar.id, bossAgent],
+    ]);
+    const cliRenderer = createCliRenderer(agentMap);
+
+    const runner = new BattleRunner([playerChar, bossChar], [agent1, bossAgent], {
+      maxTurns: opts.maxTurns,
+      turnDelayMs: opts.delay,
+      eventHandler: cliRenderer,
+    });
+
+    const log = await runner.run();
+    const won = log.winner === "agent1";
+    results.push({ bossName: bossProfile.name, won, turns: log.totalTurns });
+
+    saveReplay(log, runner.getCharacters(), runner.getAgents());
+
+    console.log();
+    console.log(won
+      ? chalk.green(`  ✅ ${bossProfile.name} defeated! (${log.totalTurns} turns)`)
+      : chalk.red(`  ❌ Defeated by ${bossProfile.name}! (${log.totalTurns} turns)`)
+    );
+    console.log();
+  }
+
+  // Scorecard
+  const wins = results.filter((r) => r.won).length;
+  const total = results.length;
+  const grade = gradeBossExam(wins, total);
+
+  const gradeColors: Record<string, string> = { S: "gold", A: "green", B: "blue", C: "magenta", D: "yellow", F: "red" };
+  console.log(chalk.bold.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
+  console.log(chalk.bold.cyan("  📋 BOSS EXAM RESULTS"));
+  console.log(chalk.bold.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
+
+  for (const r of results) {
+    const icon = r.won ? chalk.green("✅") : chalk.red("❌");
+    console.log(`  ${icon} ${r.bossName.padEnd(18)} ${r.turns} turns`);
+  }
+
+  console.log(chalk.dim("  ────────────────────────────────────────────────"));
+  console.log(chalk.bold(`  Score: ${wins}/${total}  Grade: ${grade}`));
+  console.log();
+}
+
+function gradeBossExam(wins: number, total: number): string {
+  const pct = wins / total;
+  if (pct >= 1.0) return "S";
+  if (pct >= 0.8) return "A";
+  if (pct >= 0.6) return "B";
+  if (pct >= 0.4) return "C";
+  if (pct >= 0.2) return "D";
+  return "F";
+}
+
+// ── 1v1 Battle ─────────────────────────────────────────
+
+async function run1v1(opts: CliOptions) {
   const validClasses = ["warrior", "mage", "rogue", "paladin"];
   if (!validClasses.includes(opts.agent1Class) || !validClasses.includes(opts.agent2Class)) {
     console.error(chalk.red("Invalid class. Choose from: warrior, mage, rogue, paladin"));

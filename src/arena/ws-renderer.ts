@@ -37,12 +37,17 @@ import {
  */
 export function createWsRenderer(
   ws: WebSocket,
-  playerCharacterId: string
+  playerCharacterId: string,
+  enemyCharacterId: string = "enemy"
 ): BattleEventHandler {
   return (event: BattleEvent) => {
     switch (event.type) {
       case "battle_start":
         send("battle_start", {
+          playerId: playerCharacterId,
+          enemyId: enemyCharacterId,
+          playerClass: event.characters.find((c) => c.id === playerCharacterId)?.class || "",
+          enemyClass: event.characters.find((c) => c.id === enemyCharacterId)?.class || "boss",
           characters: event.characters.map(serializeCharacter),
         });
         send("info", {

@@ -39,6 +39,13 @@ const props = defineProps<{
   winner: string | null;
   winnerReason: string;
   phase: string;
+  gameCategory?: "1v1" | "boss_exam";
+  bossExamResults?: Array<{ bossId: string; bossName: string; won: boolean; turns: number }>;
+  bossExamScorecard?: { results: any[]; completed: number; total: number; wins: number; allDone: boolean; grade: string } | null;
+  currentBossIndex?: number;
+  currentBossEmoji?: string;
+  currentBossName?: string;
+  bossExamBosses?: Array<{ id: string; name: string; emoji: string; title: string }>;
 }>();
 
 const emit = defineEmits<{
@@ -129,9 +136,23 @@ function statusLabel(type: string, turns: number): string {
   <div class="arena">
     <!-- ── Header ──────────────────────────────────────── -->
     <header class="header">
-      <span class="title">⚔️ RPG Arena</span>
-      <span class="turn-badge" v-if="phase === 'battle' || phase === 'ended'">
+      <span class="title" v-if="gameCategory === 'boss_exam'">👹 Boss Exam</span>
+      <span class="title" v-else>⚔️ RPG Arena</span>
+      <span class="turn-badge" v-if="phase === 'battle' || (phase === 'boss_exam')">
         Turn {{ turnNumber }}
+      </span>
+      <span class="boss-progress" v-if="gameCategory === 'boss_exam' && bossExamBosses">
+        <span
+          v-for="(boss, idx) in bossExamBosses"
+          :key="boss.id"
+          class="boss-dot"
+          :class="{
+            'boss-done-won': bossExamResults?.[idx]?.won,
+            'boss-done-lost': bossExamResults?.[idx] && !bossExamResults[idx].won,
+            'boss-current': idx === currentBossIndex && phase !== 'ended',
+          }"
+          :title="boss.name"
+        >{{ boss.emoji }}</span>
       </span>
     </header>
 
@@ -174,11 +195,11 @@ function statusLabel(type: string, turns: number): string {
 
       <div class="vs-badge">VS</div>
 
-      <!-- Enemy -->
+      <!-- Enemy / Boss -->
       <div class="char-card enemy-card">
         <div class="char-header">
-          <span class="char-name">{{ enemy.name || "Enemy" }}</span>
-          <span class="char-class">{{ enemyClass }}</span>
+          <span class="char-name">{{ gameCategory === 'boss_exam' && currentBossName ? currentBossName : (enemy.name || "Enemy") }}</span>
+          <span class="char-class">{{ gameCategory === 'boss_exam' ? 'BOSS' : enemyClass }}</span>
         </div>
         <div class="bar-container">
           <span class="bar-label" style="color: var(--hp)">HP</span>
@@ -259,10 +280,37 @@ function statusLabel(type: string, turns: number): string {
     <section class="action-section">
       <!-- Battle Ended -->
       <div v-if="phase === 'ended'" class="end-panel">
-        <div class="end-text" :class="winner === 'player' ? 'win' : winner === 'enemy' ? 'lose' : 'draw'">
-          {{ winner === 'player' ? '🏆 Victory!' : winner === 'enemy' ? '💀 Defeat!' : '🤝 Draw!' }}
-        </div>
-        <div class="end-reason">{{ winnerReason }}</div>
+        <!-- Boss Exam Scorecard -->
+        <template v-if="gameCategory === 'boss_exam' && bossExamScorecard">
+          <div class="scorecard">
+            <div class="scorecard-title">📋 Boss Exam Results</div>
+            <div class="scorecard-grade" :class="'grade-' + bossExamScorecard.grade.toLowerCase()">
+              {{ bossExamScorecard.grade }}
+            </div>
+            <div class="scorecard-score">
+              {{ bossExamScorecard.wins }} / {{ bossExamScorecard.total }} Bosses Defeated
+            </div>
+            <div class="scorecard-results">
+              <div
+                v-for="(r, idx) in bossExamScorecard.results"
+                :key="idx"
+                class="scorecard-row"
+                :class="r.won ? 'score-won' : 'score-lost'"
+              >
+                <span class="score-icon">{{ r.won ? '✅' : '❌' }}</span>
+                <span class="score-name">{{ r.bossName }}</span>
+                <span class="score-turns">{{ r.turns }} turns</span>
+              </div>
+            </div>
+          </div>
+        </template>
+        <!-- 1v1 Result -->
+        <template v-else>
+          <div class="end-text" :class="winner === 'player' ? 'win' : winner === 'enemy' || winner === 'boss' ? 'lose' : 'draw'">
+            {{ winner === 'player' ? '🏆 Victory!' : winner === 'enemy' || winner === 'boss' ? '💀 Defeat!' : '🤝 Draw!' }}
+          </div>
+          <div class="end-reason">{{ winnerReason }}</div>
+        </template>
         <button class="btn-accent" @click="emit('reset')">⚔️ Play Again</button>
       </div>
 
@@ -651,6 +699,76 @@ function statusLabel(type: string, turns: number): string {
   font-size: 10px;
   opacity: 0.7;
 }
+
+/* ── Boss Exam ──────────────────────────────────────── */
+.boss-progress {
+  display: flex;
+  gap: 4px;
+}
+.boss-dot {
+  font-size: 14px;
+  opacity: 0.3;
+  transition: all 0.2s;
+}
+.boss-dot.boss-current {
+  opacity: 1;
+  transform: scale(1.3);
+  filter: drop-shadow(0 0 4px rgba(255, 200, 50, 0.6));
+}
+.boss-dot.boss-done-won {
+  opacity: 1;
+}
+.boss-dot.boss-done-lost {
+  opacity: 0.6;
+  filter: grayscale(0.5);
+}
+
+/* ── Scorecard ─────────────────────────────────────── */
+.scorecard {
+  text-align: center;
+  padding: 4px 0;
+}
+.scorecard-title {
+  font-size: 16px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.scorecard-grade {
+  font-size: 48px;
+  font-weight: 900;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.grade-s { color: #fbbf24; text-shadow: 0 0 20px rgba(251, 191, 36, 0.5); }
+.grade-a { color: #34d399; }
+.grade-b { color: #60a5fa; }
+.grade-c { color: #a78bfa; }
+.grade-d { color: #fb923c; }
+.grade-f { color: #f87171; }
+.scorecard-score {
+  font-size: 14px;
+  color: var(--text-dim);
+  margin-bottom: 12px;
+}
+.scorecard-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+.scorecard-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.score-won { background: rgba(52, 211, 153, 0.1); }
+.score-lost { background: rgba(248, 113, 113, 0.1); }
+.score-icon { font-size: 14px; }
+.score-name { flex: 1; text-align: left; font-weight: 600; }
+.score-turns { font-size: 11px; color: var(--text-dim); }
 
 /* ── End Panel ──────────────────────────────────────── */
 .end-panel {

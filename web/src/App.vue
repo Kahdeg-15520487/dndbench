@@ -30,7 +30,7 @@ interface ChatMessage {
 
 // ── State ────────────────────────────────────────────────
 
-const phase = ref<"setup" | "battle" | "ended">("setup");
+const phase = ref<"setup" | "battle" | "boss_exam" | "ended">("setup");
 const connected = ref(false);
 const myTurn = ref(false);
 const enemyThinking = ref(false);
@@ -42,6 +42,15 @@ const playerClass = ref("");
 const enemyClass = ref("");
 const winner = ref<string | null>(null);
 const winnerReason = ref("");
+const gameCategory = ref<"1v1" | "boss_exam">("1v1");
+
+// Boss exam state
+const bossExamBosses = ref<Array<{ id: string; name: string; emoji: string; title: string }>>([]);
+const bossExamResults = ref<Array<{ bossId: string; bossName: string; won: boolean; turns: number }>>([]);
+const bossExamScorecard = ref<{ results: any[]; completed: number; total: number; wins: number; allDone: boolean; grade: string } | null>(null);
+const currentBossIndex = ref(0);
+const currentBossEmoji = ref("");
+const currentBossName = ref("");
 
 const player = reactive<CharState>({
   id: "",
@@ -181,8 +190,54 @@ function handleServerMessage(msg: any) {
       winner.value = msg.winner;
       winnerReason.value = msg.reason;
       updateState(msg.state);
-      phase.value = "ended";
-      addMessage("system", `🏁 ${msg.reason}`);
+      if (gameCategory.value === "boss_exam") {
+        // Don't show "ended" yet — scorecard will follow
+        addMessage("system", `🏁 ${msg.reason}`);
+      } else {
+        phase.value = "ended";
+        addMessage("system", `🏁 ${msg.reason}`);
+      }
+      break;
+
+    case "boss_exam_start":
+      phase.value = "boss_exam";
+      bossExamBosses.value = msg.bosses;
+      bossExamResults.value = [];
+      bossExamScorecard.value = null;
+      currentBossIndex.value = 0;
+      addMessage("system", `👹 Boss Exam begins! Fight ${msg.bosses.length} bosses.`);
+      break;
+
+    case "boss_exam_fight_start":
+      currentBossIndex.value = msg.bossIndex;
+      currentBossEmoji.value = msg.bossEmoji;
+      currentBossName.value = msg.bossName;
+      addMessage("system", `${msg.bossEmoji} Boss ${msg.bossIndex + 1}/${msg.totalBosses}: ${msg.bossName} — ${msg.bossTitle}`);
+      break;
+
+    case "boss_exam_fight_end": {
+      const result = { bossId: msg.bossId, bossName: msg.bossName, won: msg.won, turns: msg.turns };
+      bossExamResults.value.push(result);
+      addMessage("system", msg.won
+        ? `✅ ${msg.bossName} defeated! (${msg.turns} turns)`
+        : `❌ Defeated by ${msg.bossName}! (${msg.turns} turns)`
+      );
+      break;
+    }
+
+    case "boss_exam_scorecard":
+      bossExamScorecard.value = {
+        results: msg.results,
+        completed: msg.completed,
+        total: msg.total,
+        wins: msg.wins,
+        allDone: msg.allDone,
+        grade: msg.grade,
+      };
+      if (msg.allDone) {
+        phase.value = "ended";
+        addMessage("system", `📋 Final Score: ${msg.wins}/${msg.total} — Grade: ${msg.grade}`);
+      }
       break;
   }
 }
@@ -202,14 +257,26 @@ function addMessage(type: ChatMessage["type"], text: string) {
 
 // ── Actions ──────────────────────────────────────────────
 
-function startBattle(config: { name: string; charClass: string; enemyMode: string; llmConfigId?: number }) {
-  send({
-    type: "start_battle",
-    name: config.name,
-    class: config.charClass,
-    enemyMode: config.enemyMode,
-    llmConfigId: config.llmConfigId,
-  });
+function startBattle(config: { name: string; charClass: string; enemyMode: string; llmConfigId?: number; gameCategory: "1v1" | "boss_exam" }) {
+  gameCategory.value = config.gameCategory;
+
+  if (config.gameCategory === "boss_exam") {
+    send({
+      type: "start_boss_exam",
+      name: config.name,
+      class: config.charClass,
+      enemyMode: config.enemyMode,
+      llmConfigId: config.llmConfigId,
+    });
+  } else {
+    send({
+      type: "start_battle",
+      name: config.name,
+      class: config.charClass,
+      enemyMode: config.enemyMode,
+      llmConfigId: config.llmConfigId,
+    });
+  }
 }
 
 function sendAction(action: { type: string; spellId?: string; itemId?: string; target?: string }) {
@@ -236,6 +303,9 @@ function resetGame() {
   enemyThinking.value = false;
   thinkingSteps.value = [];
   turnNumber.value = 0;
+  bossExamResults.value = [];
+  bossExamScorecard.value = null;
+  currentBossIndex.value = 0;
 }
 
 // ── Lifecycle ────────────────────────────────────────────
@@ -269,6 +339,13 @@ onUnmounted(() => {
     :winner="winner"
     :winner-reason="winnerReason"
     :phase="phase"
+    :game-category="gameCategory"
+    :boss-exam-results="bossExamResults"
+    :boss-exam-scorecard="bossExamScorecard"
+    :current-boss-index="currentBossIndex"
+    :current-boss-emoji="currentBossEmoji"
+    :current-boss-name="currentBossName"
+    :boss-exam-bosses="bossExamBosses"
     @action="sendAction"
     @reset="resetGame"
   />
