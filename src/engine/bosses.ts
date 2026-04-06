@@ -142,7 +142,7 @@ export function createBoss(bossId: BossId): Character {
   return {
     id: "boss",
     name: profile.name,
-    class: "warrior", // bosses don't have a class, use warrior as default
+    class: "boss" as any, // bosses don't have a standard class
     stats,
     statusEffects: [],
     spells,

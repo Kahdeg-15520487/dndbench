@@ -179,7 +179,16 @@ export class BattleRunner {
 
       // Resolve action in engine
       const target = this.getTarget(character);
-      const result = resolveAction(character, target, action);
+
+      // For self-targeting actions (shield, heal), the target is the actor
+      const spellTarget = action.type === "cast_spell"
+        ? character.spells.find(s => s.id === action.spellId)
+        : null;
+      const resolveTarget = (spellTarget?.target === "self" || action.type === "defend" || action.type === "wait")
+        ? character
+        : target;
+
+      const result = resolveAction(character, resolveTarget, action);
 
       this.emit({ type: "action_result", actorId: character.id, targetId: target.id, result });
       agent.onActionResult?.(result);
