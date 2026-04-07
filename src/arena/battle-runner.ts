@@ -262,11 +262,15 @@ export class BattleRunner {
       // ── Resolve target ──
       const target = this.resolveTarget(character, action);
 
-      // For self-targeting actions (shield, heal, wait, defend), the target IS the actor
+      // For self-targeting actions, the target IS the actor
       const spell = action.type === "cast_spell"
         ? character.spells.find(s => s.id === action.spellId)
         : null;
-      const actionTarget = (spell?.target === "self" || action.type === "defend" || action.type === "wait")
+      const isSelfItem = action.type === "use_item" && (() => {
+        const item = character.inventory.find(i => i.id === action.itemId);
+        return item && (item.type === "heal_hp" || item.type === "cure" || item.type === "full_restore");
+      })();
+      const actionTarget = (spell?.target === "self" || action.type === "defend" || action.type === "wait" || isSelfItem)
         ? character
         : target;
 

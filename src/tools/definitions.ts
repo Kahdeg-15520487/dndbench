@@ -51,7 +51,7 @@ const ACTION_TOOLS: ToolDefinition[] = [
   {
     name: "attack",
     description:
-      "ACTION: Basic physical attack on the enemy. Melee range (1.5 units). Damage scales with Strength. Can crit (Luck). Can be dodged (Speed). Commits your turn.",
+      "ACTION: Melee weapon attack. d20 + STR modifier vs target AC. Must be within melee range (5ft). Commits your turn.",
     parameters: {
       target: {
         type: "string",
@@ -63,33 +63,35 @@ const ACTION_TOOLS: ToolDefinition[] = [
   {
     name: "defend",
     description:
-      "ACTION: Defensive stance. Greatly increases Defense this turn. Lasts until your next turn. Commits your turn.",
+      "ACTION: Defensive stance. +2 AC until your next turn. Commits your turn.",
     parameters: {},
   },
   {
     name: "cast_spell",
     description:
-      "ACTION: Cast a spell (costs MP, may have cooldown). Each spell has a range — if enemy is out of range the spell fails. Commits your turn.",
+      "ACTION: Cast a spell (uses a spell slot, or cantrip for free). Each spell has a range in feet — if enemy is out of range the spell fails. Commits your turn.",
     parameters: {
       spell_id: {
         type: "string",
         description: "The spell to cast.",
         enum: [
-          "fire",
-          "ice",
-          "lightning",
-          "heal",
+          "fire_bolt",
+          "magic_missile",
           "shield",
-          "poison",
-          "drain",
-          "meteor",
+          "thunderwave",
+          "cure_wounds",
+          "shield_of_faith",
+          "scorching_ray",
+          "hold_person",
+          "fireball",
+          "lightning_bolt",
         ],
         required: true,
       },
       target: {
         type: "string",
         description:
-          "'self' for heal/buff spells, or enemy identifier for damage/debuff spells.",
+          "Name of the target character (e.g. 'Goblin King'). Use your own name for self-targeting spells (shield, cure_wounds, shield_of_faith).",
         required: true,
       },
     },
@@ -97,14 +99,14 @@ const ACTION_TOOLS: ToolDefinition[] = [
   {
     name: "use_item",
     description:
-      "ACTION: Use a consumable item from inventory. Bombs have range 6, other items are self-use. Commits your turn.",
+      "ACTION: Use a consumable item from inventory. Bombs have range 20ft and need a target, other items are self-use. Commits your turn.",
     parameters: {
       item_id: {
         type: "string",
         description: "The item to use.",
         enum: [
           "health_potion",
-          "mana_potion",
+          "greater_health_potion",
           "antidote",
           "bomb",
           "elixir",
@@ -116,7 +118,7 @@ const ACTION_TOOLS: ToolDefinition[] = [
   {
     name: "wait",
     description:
-      "ACTION: Wait and recover 8 MP. Useful when conserving resources. Commits your turn.",
+      "ACTION: Wait and do nothing. Useful when conserving resources or when no good option is available. Commits your turn.",
     parameters: {},
   },
   {

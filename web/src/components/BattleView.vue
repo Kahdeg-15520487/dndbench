@@ -8,13 +8,13 @@ interface CharState {
   class: string;
   hp: number;
   maxHp: number;
-  mp: number;
-  maxMp: number;
+  ac: number;
   statusEffects: { type: string; turnsRemaining: number }[];
   isDefending: boolean;
   position?: { x: number; y: number };
   spells: { id: string; name: string; currentCooldown: number }[];
   inventory: { id: string; name: string; quantity: number }[];
+  spellSlots?: Record<string, number>;
 }
 
 interface ChatMessage {
@@ -80,7 +80,6 @@ const actionMode = ref<"main" | "spells" | "items">("main");
 
 // ── HP / MP bars ──────────────────────────────────────
 function hpPct(c: CharState) { return c.maxHp > 0 ? (c.hp / c.maxHp) * 100 : 0; }
-function mpPct(c: CharState) { return c.maxMp > 0 ? (c.mp / c.maxMp) * 100 : 0; }
 function hpColor(pct: number): string {
   if (pct > 60) return "var(--hp)";
   if (pct > 30) return "var(--hp-mid)";
@@ -94,10 +93,8 @@ const availableItems = computed(() =>
   humanChar.value.inventory.filter(i => i.quantity > 0)
 );
 
-const spellCosts: Record<string, number> = {
-  fire: 12, ice: 14, lightning: 18, heal: 15,
-  shield: 10, poison: 10, drain: 16, meteor: 35,
-};
+// Spell slot level labels for display
+const SLOT_LABELS: Record<string, string> = { "1": "1st", "2": "2nd", "3": "3rd" };
 
 // ── Team colors ──────────────────────────────────────
 const TEAM_COLORS: Record<string, string> = {
@@ -362,11 +359,8 @@ onMounted(() => nextTick(drawBattlefield));
             <span class="bar-value">{{ c.hp }}/{{ c.maxHp }}</span>
           </div>
           <div class="bar-container">
-            <span class="bar-label" style="color: var(--mp)">MP</span>
-            <div class="bar-track">
-              <div class="bar-fill" :style="{ width: mpPct(c) + '%', background: 'var(--mp)' }" />
-            </div>
-            <span class="bar-value">{{ c.mp }}/{{ c.maxMp }}</span>
+            <span class="bar-label" style="color: var(--ac)">AC</span>
+            <span class="bar-value ac-val">{{ c.ac }}</span>
           </div>
           <div class="status-tags" v-if="c.statusEffects.length">
             <span v-for="s in c.statusEffects" :key="s.type" class="status-tag">{{ statusEmoji[s.type] || "●" }}</span>
@@ -391,11 +385,8 @@ onMounted(() => nextTick(drawBattlefield));
           <span class="bar-value">{{ player.hp }}/{{ player.maxHp }}</span>
         </div>
         <div class="bar-container">
-          <span class="bar-label" style="color: var(--mp)">MP</span>
-          <div class="bar-track">
-            <div class="bar-fill" :style="{ width: mpPct(player) + '%', background: 'var(--mp)' }" />
-          </div>
-          <span class="bar-value">{{ player.mp }}/{{ player.maxMp }}</span>
+          <span class="bar-label" style="color: var(--ac)">AC</span>
+          <span class="bar-value ac-val">{{ player.ac }}</span>
         </div>
         <div class="status-tags" v-if="player.statusEffects.length">
           <span v-for="s in player.statusEffects" :key="s.type" class="status-tag">{{ statusLabel(s.type, s.turnsRemaining) }}</span>
@@ -418,11 +409,8 @@ onMounted(() => nextTick(drawBattlefield));
           <span class="bar-value">{{ enemy.hp }}/{{ enemy.maxHp }}</span>
         </div>
         <div class="bar-container">
-          <span class="bar-label" style="color: var(--mp)">MP</span>
-          <div class="bar-track">
-            <div class="bar-fill" :style="{ width: mpPct(enemy) + '%', background: 'var(--mp)' }" />
-          </div>
-          <span class="bar-value">{{ enemy.mp }}/{{ enemy.maxMp }}</span>
+          <span class="bar-label" style="color: var(--ac)">AC</span>
+          <span class="bar-value ac-val">{{ enemy.ac }}</span>
         </div>
         <div class="status-tags" v-if="enemy.statusEffects.length">
           <span v-for="s in enemy.statusEffects" :key="s.type" class="status-tag">{{ statusLabel(s.type, s.turnsRemaining) }}</span>
@@ -509,18 +497,17 @@ onMounted(() => nextTick(drawBattlefield));
       <div v-else-if="actionMode === 'spells'" class="sub-panel">
         <div class="sub-header">
           <button class="btn btn-sm" @click="actionMode = 'main'">← Back</button>
-          <span class="sub-title">✨ Choose Spell ({{ humanChar.mp }} MP)</span>
+          <span class="sub-title">✨ Choose Spell</span>
         </div>
         <div class="sub-grid">
           <button
             v-for="s in availableSpells"
             :key="s.id"
             class="btn btn-sm spell-btn"
-            :disabled="!myTurn || (spellCosts[s.id] || 0) > humanChar.mp"
+            :disabled="!myTurn"
             @click="doAction('cast_spell', { spellId: s.id })"
           >
             {{ s.name }}
-            <span class="spell-cost">{{ spellCosts[s.id] || '?' }} MP</span>
           </button>
         </div>
       </div>
@@ -686,6 +673,7 @@ onMounted(() => nextTick(drawBattlefield));
 }
 .bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
 .bar-value { font-size: 10px; color: var(--text-dim); width: 55px; flex-shrink: 0; text-align: right; }
+.ac-val { color: var(--ac); font-weight: 700; font-size: 14px; }
 .status-tags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; min-height: 0; }
 .status-tag {
   font-size: 9px;

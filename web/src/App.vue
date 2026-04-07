@@ -12,13 +12,13 @@ interface CharState {
   class: string;
   hp: number;
   maxHp: number;
-  mp: number;
-  maxMp: number;
+  ac: number;
   statusEffects: { type: string; turnsRemaining: number }[];
   isDefending: boolean;
   position?: { x: number; y: number };
   spells: { id: string; name: string; currentCooldown: number }[];
   inventory: { id: string; name: string; quantity: number }[];
+  spellSlots?: Record<string, number>;
 }
 
 interface ChatMessage {
@@ -69,7 +69,7 @@ const playerClass = computed(() => player.value.class);
 const enemyClass = computed(() => enemy.value.class);
 
 function emptyChar(): CharState {
-  return { id: "", name: "", team: "", class: "", hp: 0, maxHp: 0, mp: 0, maxMp: 0, statusEffects: [], isDefending: false, spells: [], inventory: [] };
+  return { id: "", name: "", team: "", class: "", hp: 0, maxHp: 0, ac: 10, statusEffects: [], isDefending: false, spells: [], inventory: [], spellSlots: {} };
 }
 
 const messages = ref<ChatMessage[]>([]);
