@@ -204,31 +204,54 @@ function printActionResult(result: import("../engine/types.js").CombatResult): v
   console.log();
 }
 
+function stripAnsi(str: string): string {
+  return str.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function padVisual(str: string, width: number): string {
+  const visual = stripAnsi(str);
+  const padding = Math.max(0, width - visual.length);
+  return str + " ".repeat(padding);
+}
+
 function printHealthBars(characters: Character[]): void {
-  // Table header
-  console.log(chalk.bold("\n  ┌─────────────┬──────────────────┬──────────────────┬─────────────┐"));
-  console.log(chalk.bold("  │ Name        │ HP               │ MP               │ Position    │"));
-  console.log(chalk.bold("  ├─────────────┼──────────────────┼──────────────────┼─────────────┤"));
+  // Column widths (visual chars between │ │)
+  const COL_NAME = 12;
+  const COL_STAT = 20;  // bar(10) + " " + "NNN/NNN"
+  const COL_POS  = 11;
+
+  const top    = `  ┌${"─".repeat(COL_NAME)}┬${"─".repeat(COL_STAT)}┬${"─".repeat(COL_STAT)}┬${"─".repeat(COL_POS)}┐`;
+  const header = `  │${padVisual(" Name", COL_NAME)}│${padVisual(" HP", COL_STAT)}│${padVisual(" MP", COL_STAT)}│${padVisual(" Position", COL_POS)}│`;
+  const sep    = `  ├${"─".repeat(COL_NAME)}┼${"─".repeat(COL_STAT)}┼${"─".repeat(COL_STAT)}┼${"─".repeat(COL_POS)}┤`;
+  const bottom = `  └${"─".repeat(COL_NAME)}┴${"─".repeat(COL_STAT)}┴${"─".repeat(COL_STAT)}┴${"─".repeat(COL_POS)}┘`;
+
+  console.log(chalk.bold("\n" + top));
+  console.log(chalk.bold(header));
+  console.log(chalk.bold(sep));
 
   for (const char of characters) {
-    const hpPct = char.stats.hp / char.stats.maxHp;
-    const barLen = 14;
-    const filled = Math.round(hpPct * barLen);
-    const hpBar = "█".repeat(filled) + "░".repeat(barLen - filled);
+    const hpPct = char.stats.maxHp > 0 ? char.stats.hp / char.stats.maxHp : 0;
+    const barLen = 10;
+    const hpFilled = Math.round(hpPct * barLen);
+    const hpBar = "█".repeat(hpFilled) + "░".repeat(barLen - hpFilled);
     const hpColor = hpPct > 0.6 ? chalk.green : hpPct > 0.3 ? chalk.yellow : chalk.red;
+    const hpText = `${char.stats.hp}/${char.stats.maxHp}`;
 
-    const mpPct = char.stats.mp / char.stats.maxMp;
+    const mpPct = char.stats.maxMp > 0 ? char.stats.mp / char.stats.maxMp : 0;
     const mpFilled = Math.round(mpPct * barLen);
     const mpBar = "█".repeat(mpFilled) + "░".repeat(barLen - mpFilled);
+    const mpText = `${char.stats.mp}/${char.stats.maxMp}`;
 
-    const pos = char.position ? `(${char.position.x.toFixed(1)},${char.position.y.toFixed(1)})` : "?";
+    const pos = char.position ? `(${char.position.x.toFixed(1)},${char.position.y.toFixed(1)})` : "(?,?)";
     const status = char.statusEffects.length > 0 ? chalk.gray(` [${char.statusEffects.map((e) => e.type).join(", ")}]`) : "";
 
-    console.log(
-      `  │ ${char.name.padEnd(11)} │ ${hpColor(hpBar)} ${String(char.stats.hp).padStart(3)}/${String(char.stats.maxHp).padEnd(3)} │ ${chalk.blue(mpBar)} ${String(char.stats.mp).padStart(3)}/${String(char.stats.maxMp).padEnd(3)} │ ${pos.padEnd(11)} │${status}`
-    );
+    const name = chalk.bold(char.name);
+    const hp = padVisual(hpColor(hpBar) + " " + hpText, COL_STAT);
+    const mp = padVisual(chalk.blue(mpBar) + " " + mpText, COL_STAT);
+
+    console.log(`  │${padVisual(" " + name, COL_NAME)}│${hp}│${mp}│${padVisual(" " + pos, COL_POS)}│${status}`);
   }
-  console.log(chalk.bold("  └─────────────┴──────────────────┴──────────────────┴─────────────┘\n"));
+  console.log(chalk.bold(bottom + "\n"));
 }
 
 // ── Summary (called after run()) ────────────────────────
