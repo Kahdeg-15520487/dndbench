@@ -104,11 +104,11 @@ const BOSSES: BossProfile[] = [
 // ── Item definitions (reuse from characters.ts) ──────────
 
 const ALL_ITEMS: Record<ItemId, Omit<InventoryItem, "quantity">> = {
-  health_potion: { id: "health_potion", name: "Health Potion", description: "Restore 40 HP.", type: "heal_hp", potency: 40 },
-  mana_potion: { id: "mana_potion", name: "Mana Potion", description: "Restore 30 MP.", type: "heal_mp", potency: 30 },
-  antidote: { id: "antidote", name: "Antidote", description: "Cure all status effects.", type: "cure", potency: 0 },
-  bomb: { id: "bomb", name: "Bomb", description: "Deal 35 fixed damage to the enemy.", type: "damage", potency: 35 },
-  elixir: { id: "elixir", name: "Elixir", description: "Fully restore HP and MP.", type: "full_restore", potency: 0 },
+  health_potion: { id: "health_potion", name: "Health Potion", description: "Restore 40 HP.", type: "heal_hp", potency: 40, range: 0 },
+  mana_potion: { id: "mana_potion", name: "Mana Potion", description: "Restore 30 MP.", type: "heal_mp", potency: 30, range: 0 },
+  antidote: { id: "antidote", name: "Antidote", description: "Cure all status effects.", type: "cure", potency: 0, range: 0 },
+  bomb: { id: "bomb", name: "Bomb", description: "Deal 35 fixed damage to the enemy.", type: "damage", potency: 35, range: 6 },
+  elixir: { id: "elixir", name: "Elixir", description: "Fully restore HP and MP.", type: "full_restore", potency: 0, range: 0 },
 };
 
 // ── Factory ─────────────────────────────────────────────
@@ -142,6 +142,7 @@ export function createBoss(bossId: BossId): Character {
   return {
     id: "boss",
     name: profile.name,
+    team: "boss",
     class: "boss" as any, // bosses don't have a standard class
     stats,
     statusEffects: [],
@@ -149,6 +150,7 @@ export function createBoss(bossId: BossId): Character {
     inventory,
     isDefending: false,
     actionHistory: [],
+    position: { x: 0, y: 0 },
   };
 }
 

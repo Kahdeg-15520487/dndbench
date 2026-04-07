@@ -15,6 +15,12 @@ import {
   TurnResult,
   StatusEffect,
   StatusEffectType,
+  Position,
+  MoveVector,
+  MoveResult,
+  ArenaConfig,
+  distance,
+  maxMovePerTurn,
 } from "./types.js";
 import { createCharacter } from "./characters.js";
 
@@ -93,6 +99,25 @@ function resolveAttack(
   defender: Character
 ): CombatResult {
   const narrative: string[] = [];
+
+  // Range check
+  if (!inRange(attacker, defender, MELEE_RANGE)) {
+    narrative.push(`${attacker.name} swings at ${defender.name} but is too far away! (distance: ${distance(attacker.position, defender.position).toFixed(1)})`);
+    return {
+      action: { type: "attack", actorId: attacker.id, targetId: defender.id },
+      actorId: attacker.id,
+      targetId: defender.id,
+      narrative: narrative.join(" "),
+      damage: {
+        damage: 0,
+        wasCrit: false,
+        wasMiss: true,
+        effective: "normal",
+        targetHp: defender.stats.hp,
+        targetMaxHp: defender.stats.maxHp,
+      },
+    };
+  }
 
   // Freeze check — skip turn
   if (hasStatus(attacker, "freeze")) {
@@ -214,6 +239,16 @@ function resolveSpell(
       actorId: caster.id,
       targetId: target.id,
       narrative: `${caster.name} doesn't have enough MP to cast ${spell.name}! (${caster.stats.mp}/${spell.mpCost} MP)`,
+    };
+  }
+
+  // Range check for enemy-targeted spells
+  if (spell.target === "enemy" && !inRange(caster, target, spell.range)) {
+    return {
+      action: { type: "cast_spell", actorId: caster.id, targetId: target.id, spellId },
+      actorId: caster.id,
+      targetId: target.id,
+      narrative: `${caster.name} casts ${spell.name} but ${target.name} is out of range! (distance: ${distance(caster.position, target.position).toFixed(1)}, range: ${spell.range})`,
     };
   }
 
@@ -382,6 +417,11 @@ function resolveItem(
       break;
     }
     case "damage": {
+      // Range check for thrown items
+      if (!inRange(user, _target, item.range)) {
+        narrative.push(`💣 ${user.name} throws a ${item.name} at ${_target.name} but it falls short! (distance: ${distance(user.position, _target.position).toFixed(1)})`);
+        break;
+      }
       const dmg = item.potency;
       _target.stats.hp = clamp(_target.stats.hp - dmg, 0, _target.stats.maxHp);
       itemResult.value = dmg;
@@ -444,6 +484,57 @@ function resolveFlee(actor: Character): CombatResult {
   };
 }
 
+// ── Movement Resolution ─────────────────────────────────
+
+/**
+ * Apply a move vector to a character, clamped by max speed and arena bounds.
+ * Returns the MoveResult describing what happened.
+ */
+export function resolveMove(
+  character: Character,
+  move: MoveVector,
+  arena: ArenaConfig
+): MoveResult {
+  const maxDist = maxMovePerTurn(character.stats.speed);
+
+  // Haste/slow affect movement speed
+  let effectiveMax = maxDist;
+  if (hasStatus(character, "haste")) effectiveMax *= 1.3;
+  if (hasStatus(character, "slow")) effectiveMax *= 0.7;
+
+  // Clamp movement vector to max distance
+  const requested = Math.sqrt(move.dx * move.dx + move.dy * move.dy);
+  const scale = requested > effectiveMax ? effectiveMax / requested : 1;
+
+  let dx = move.dx * scale;
+  let dy = move.dy * scale;
+
+  // Apply movement, clamped to arena bounds (with small margin for circle radius)
+  const margin = 0.5;
+  const from = { ...character.position };
+  character.position.x = clamp(from.x + dx, margin, arena.width - margin);
+  character.position.y = clamp(from.y + dy, margin, arena.height - margin);
+
+  const actualDist = distance(from, character.position);
+
+  return {
+    from,
+    to: { ...character.position },
+    distanceMoved: Math.round(actualDist * 100) / 100,
+  };
+}
+
+/**
+ * Check if actor can reach target with a given range.
+ * Basic attack has range 1.5 (melee). Spells/items use their own range.
+ */
+export function inRange(actor: Character, target: Character, range: number): boolean {
+  return distance(actor.position, target.position) <= range;
+}
+
+/** Melee attack range */
+export const MELEE_RANGE = 1.5;
+
 // ── Main Resolve ────────────────────────────────────────
 
 export function resolveAction(
@@ -492,12 +583,14 @@ export function tickCooldowns(character: Character): void {
 export function createSnapshot(
   characters: Character[],
   turnNumber: number,
-  phase: BattlePhase
+  phase: BattlePhase,
+  arena: ArenaConfig
 ): BattleStateSnapshot {
   return {
     characters: characters.map((c) => ({
       id: c.id,
       name: c.name,
+      team: c.team,
       hp: c.stats.hp,
       maxHp: c.stats.maxHp,
       mp: c.stats.mp,
@@ -507,6 +600,7 @@ export function createSnapshot(
         turnsRemaining: e.turnsRemaining,
       })),
       isDefending: c.isDefending,
+      position: { ...c.position },
       spells: c.spells.map((s) => ({
         id: s.id,
         name: s.name,
@@ -515,16 +609,18 @@ export function createSnapshot(
         target: s.target,
         mpCost: s.mpCost,
         basePower: s.basePower,
+        range: s.range,
         cooldown: s.cooldown,
         currentCooldown: s.currentCooldown,
         statusEffect: s.statusEffect,
       })),
       inventory: c.inventory
         .filter((i) => i.quantity > 0)
-        .map((i) => ({ id: i.id, name: i.name, description: i.description, quantity: i.quantity, type: i.type, potency: i.potency })),
+        .map((i) => ({ id: i.id, name: i.name, description: i.description, quantity: i.quantity, type: i.type, potency: i.potency, range: i.range })),
     })),
     turnNumber,
     phase,
+    arena,
   };
 }
 

@@ -65,6 +65,7 @@ const ALL_SPELLS: Record<SpellId, Omit<Spell, "currentCooldown">> = {
     type: "damage",
     target: "enemy",
     basePower: 28,
+    range: 8,
     statusEffect: { type: "burn", chance: 0.35, potency: 5, duration: 3 },
   },
   ice: {
@@ -76,6 +77,7 @@ const ALL_SPELLS: Record<SpellId, Omit<Spell, "currentCooldown">> = {
     type: "damage",
     target: "enemy",
     basePower: 24,
+    range: 7,
     statusEffect: { type: "freeze", chance: 0.25, potency: 0, duration: 1 },
   },
   lightning: {
@@ -87,6 +89,7 @@ const ALL_SPELLS: Record<SpellId, Omit<Spell, "currentCooldown">> = {
     type: "damage",
     target: "enemy",
     basePower: 40,
+    range: 10,
   },
   heal: {
     id: "heal",
@@ -97,6 +100,7 @@ const ALL_SPELLS: Record<SpellId, Omit<Spell, "currentCooldown">> = {
     type: "heal",
     target: "self",
     basePower: 35,
+    range: 0,
   },
   shield: {
     id: "shield",
@@ -107,6 +111,7 @@ const ALL_SPELLS: Record<SpellId, Omit<Spell, "currentCooldown">> = {
     type: "buff",
     target: "self",
     basePower: 0,
+    range: 0,
     statusEffect: { type: "shield", chance: 1.0, potency: 12, duration: 3 },
   },
   poison: {
@@ -118,6 +123,7 @@ const ALL_SPELLS: Record<SpellId, Omit<Spell, "currentCooldown">> = {
     type: "debuff",
     target: "enemy",
     basePower: 10,
+    range: 6,
     statusEffect: { type: "poison", chance: 0.7, potency: 6, duration: 4 },
   },
   drain: {
@@ -129,6 +135,7 @@ const ALL_SPELLS: Record<SpellId, Omit<Spell, "currentCooldown">> = {
     type: "drain",
     target: "enemy",
     basePower: 22,
+    range: 5,
   },
   meteor: {
     id: "meteor",
@@ -139,6 +146,7 @@ const ALL_SPELLS: Record<SpellId, Omit<Spell, "currentCooldown">> = {
     type: "damage",
     target: "enemy",
     basePower: 65,
+    range: 99,
     statusEffect: { type: "burn", chance: 0.5, potency: 8, duration: 2 },
   },
 };
@@ -159,6 +167,7 @@ const ALL_ITEMS: Record<ItemId, Omit<InventoryItem, "quantity">> = {
     description: "Restore 40 HP.",
     type: "heal_hp",
     potency: 40,
+    range: 0, // self-use
   },
   mana_potion: {
     id: "mana_potion",
@@ -166,6 +175,7 @@ const ALL_ITEMS: Record<ItemId, Omit<InventoryItem, "quantity">> = {
     description: "Restore 30 MP.",
     type: "heal_mp",
     potency: 30,
+    range: 0,
   },
   antidote: {
     id: "antidote",
@@ -173,6 +183,7 @@ const ALL_ITEMS: Record<ItemId, Omit<InventoryItem, "quantity">> = {
     description: "Cure all status effects.",
     type: "cure",
     potency: 0,
+    range: 0,
   },
   bomb: {
     id: "bomb",
@@ -180,6 +191,7 @@ const ALL_ITEMS: Record<ItemId, Omit<InventoryItem, "quantity">> = {
     description: "Deal 35 fixed damage to the enemy.",
     type: "damage",
     potency: 35,
+    range: 6, // thrown weapon
   },
   elixir: {
     id: "elixir",
@@ -187,6 +199,7 @@ const ALL_ITEMS: Record<ItemId, Omit<InventoryItem, "quantity">> = {
     description: "Fully restore HP and MP.",
     type: "full_restore",
     potency: 0,
+    range: 0,
   },
 };
 
@@ -219,7 +232,9 @@ const CLASS_INVENTORY: Record<CharacterClass, { id: ItemId; qty: number }[]> = {
 export function createCharacter(
   id: string,
   name: string,
-  charClass: CharacterClass
+  charClass: CharacterClass,
+  position: { x: number; y: number } = { x: 0, y: 0 },
+  team: string = "a"
 ): Character {
   const profile = CLASS_STATS[charClass];
 
@@ -248,6 +263,7 @@ export function createCharacter(
   return {
     id,
     name,
+    team,
     class: charClass,
     stats,
     statusEffects: [],
@@ -255,6 +271,7 @@ export function createCharacter(
     inventory,
     isDefending: false,
     actionHistory: [],
+    position: { ...position },
   };
 }
 
