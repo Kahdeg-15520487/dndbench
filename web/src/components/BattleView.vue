@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from "vue";
+import { ref, computed, watch, nextTick, onMounted } from "vue";
 
 interface CharState {
   id: string;
@@ -10,6 +10,7 @@ interface CharState {
   maxMp: number;
   statusEffects: { type: string; turnsRemaining: number }[];
   isDefending: boolean;
+  position?: { x: number; y: number };
   spells: { id: string; name: string; currentCooldown: number }[];
   inventory: { id: string; name: string; quantity: number }[];
 }
@@ -46,6 +47,9 @@ const props = defineProps<{
   currentBossEmoji?: string;
   currentBossName?: string;
   bossExamBosses?: Array<{ id: string; name: string; emoji: string; title: string }>;
+  arena?: { width: number; height: number; label: string };
+  moveEvent?: { actorId: string; from: { x: number; y: number }; to: { x: number; y: number }; distance: number } | null;
+  actorId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -130,6 +134,165 @@ const statusEmoji: Record<string, string> = {
 function statusLabel(type: string, turns: number): string {
   return `${statusEmoji[type] || "●"} ${type} (${turns})`;
 }
+
+// ── Battlefield Canvas ────────────────────────────────
+const battlefieldCanvas = ref<HTMLCanvasElement | null>(null);
+
+function drawBattlefield() {
+  const canvas = battlefieldCanvas.value;
+  if (!canvas) return;
+
+  const arena = props.arena ?? { width: 20, height: 12, label: "Arena" };
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  const displayWidth = canvas.clientWidth;
+  const displayHeight = canvas.clientHeight;
+  canvas.width = displayWidth * dpr;
+  canvas.height = displayHeight * dpr;
+  ctx.scale(dpr, dpr);
+
+  const padding = 24;
+  const scaleX = (displayWidth - padding * 2) / arena.width;
+  const scaleY = (displayHeight - padding * 2) / arena.height;
+  const scale = Math.min(scaleX, scaleY);
+
+  const offsetX = (displayWidth - arena.width * scale) / 2;
+  const offsetY = (displayHeight - arena.height * scale) / 2;
+
+  const toX = (pos: number) => offsetX + pos * scale;
+  const toY = (pos: number) => offsetY + pos * scale;
+
+  // Background
+  ctx.fillStyle = "#0f0f1a";
+  ctx.fillRect(0, 0, displayWidth, displayHeight);
+
+  // Grid
+  ctx.strokeStyle = "rgba(255,255,255,0.04)";
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x <= arena.width; x++) {
+    ctx.beginPath();
+    ctx.moveTo(toX(x), toY(0));
+    ctx.lineTo(toX(x), toY(arena.height));
+    ctx.stroke();
+  }
+  for (let y = 0; y <= arena.height; y++) {
+    ctx.beginPath();
+    ctx.moveTo(toX(0), toY(y));
+    ctx.lineTo(toX(arena.width), toY(y));
+    ctx.stroke();
+  }
+
+  // Arena border
+  ctx.strokeStyle = "rgba(255,255,255,0.15)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(toX(0), toY(0), arena.width * scale, arena.height * scale);
+
+  // Move trail arrow
+  if (props.moveEvent) {
+    const mv = props.moveEvent;
+    const p1x = toX(mv.from.x);
+    const p1y = toY(mv.from.y);
+    const p2x = toX(mv.to.x);
+    const p2y = toY(mv.to.y);
+
+    ctx.strokeStyle = "#fbbf24";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(p1x, p1y);
+    ctx.lineTo(p2x, p2y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Arrowhead
+    const angle = Math.atan2(p2y - p1y, p2x - p1x);
+    const headLen = 8;
+    ctx.fillStyle = "#f59e0b";
+    ctx.beginPath();
+    ctx.moveTo(p2x, p2y);
+    ctx.lineTo(p2x - headLen * Math.cos(angle - 0.4), p2y - headLen * Math.sin(angle - 0.4));
+    ctx.lineTo(p2x - headLen * Math.cos(angle + 0.4), p2y - headLen * Math.sin(angle + 0.4));
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // Characters
+  const chars = [props.player, props.enemy];
+  for (const char of chars) {
+    if (!char.position) continue;
+    const cx = toX(char.position.x);
+    const cy = toY(char.position.y);
+    const radius = Math.max(scale * 0.45, 8);
+    const isPlayer = char.id === props.player.id || char.id === "player" || char.id === "agent1";
+
+    // Active glow
+    if (char.id === props.actorId) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius + 6, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(251,191,36,0.3)";
+      ctx.fill();
+    }
+
+    // Shield/defend aura
+    if (char.statusEffects.some((e) => e.type === "shield") || char.isDefending) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius + 3, 0, Math.PI * 2);
+      ctx.strokeStyle = char.isDefending ? "rgba(52,211,153,0.6)" : "rgba(96,165,250,0.6)";
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([3, 2]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Circle
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.fillStyle = isPlayer ? "#3b82f6" : "#ef4444";
+    ctx.fill();
+    ctx.strokeStyle = isPlayer ? "#60a5fa" : "#f87171";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Initial
+    ctx.fillStyle = "#fff";
+    ctx.font = `bold ${Math.round(radius * 0.9)}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText((char.name || "?").charAt(0).toUpperCase(), cx, cy);
+
+    // HP bar
+    const barW = Math.max(radius * 2.4, 20);
+    const barH = 3;
+    const barX = cx - barW / 2;
+    const barY = cy - radius - 10;
+    const hpPct = char.maxHp > 0 ? char.hp / char.maxHp : 0;
+
+    ctx.fillStyle = "rgba(0,0,0,0.4)";
+    ctx.fillRect(barX, barY, barW, barH);
+
+    const hpColor = hpPct > 0.6 ? "#22c55e" : hpPct > 0.3 ? "#eab308" : "#ef4444";
+    ctx.fillStyle = hpColor;
+    ctx.fillRect(barX, barY, barW * hpPct, barH);
+
+    // Name
+    ctx.fillStyle = "#e2e8f0";
+    ctx.font = "10px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(char.name || "?", cx, barY - 2);
+  }
+}
+
+// Redraw when positions or move events change
+watch(
+  () => [props.player.position, props.enemy.position, props.moveEvent, props.actorId, props.arena],
+  () => nextTick(drawBattlefield),
+  { deep: true }
+);
+
+onMounted(() => nextTick(drawBattlefield));
 </script>
 
 <template>
@@ -155,6 +318,11 @@ function statusLabel(type: string, turns: number): string {
         >{{ boss.emoji }}</span>
       </span>
     </header>
+
+    <!-- ── Battlefield Canvas ──────────────────────────── -->
+    <section v-if="phase === 'battle' || phase === 'boss_exam'" class="battlefield-section">
+      <canvas ref="battlefieldCanvas" class="battlefield-canvas"></canvas>
+    </section>
 
     <!-- ── Status Bars ─────────────────────────────────── -->
     <section class="status-section">
@@ -406,6 +574,20 @@ function statusLabel(type: string, turns: number): string {
   padding: 10px 16px;
   background: var(--bg-card);
   border-bottom: 1px solid var(--border);
+}
+
+/* ── Battlefield Canvas ──────────────────────────────── */
+.battlefield-section {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+.battlefield-canvas {
+  width: 100%;
+  height: 140px;
+  border-radius: 8px;
+  display: block;
 }
 .title {
   font-weight: 700;

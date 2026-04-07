@@ -52,6 +52,11 @@ const currentBossIndex = ref(0);
 const currentBossEmoji = ref("");
 const currentBossName = ref("");
 
+// Arena / battlefield state
+const arena = ref<{ width: number; height: number; label: string }>({ width: 20, height: 12, label: "Arena" });
+const moveEvent = ref<{ actorId: string; from: { x: number; y: number }; to: { x: number; y: number }; distance: number } | null>(null);
+const currentActorId = ref<string>("");
+
 const player = reactive<CharState>({
   id: "",
   name: "",
@@ -123,12 +128,15 @@ function handleServerMessage(msg: any) {
       enemyId.value = msg.enemyId;
       playerClass.value = msg.playerClass;
       enemyClass.value = msg.enemyClass;
+      if (msg.arena) arena.value = msg.arena;
       updateState(msg.state);
       phase.value = "battle";
+      moveEvent.value = null;
       break;
 
     case "turn_start":
       turnNumber.value = msg.turnNumber;
+      currentActorId.value = msg.actorId;
       updateState(msg.state);
       break;
 
@@ -138,8 +146,18 @@ function handleServerMessage(msg: any) {
       updateState(msg.state);
       break;
 
+    case "move":
+      moveEvent.value = {
+        actorId: msg.actorId,
+        from: msg.from,
+        to: msg.to,
+        distance: msg.distance,
+      };
+      break;
+
     case "action_chosen":
       addMessage("system", `→ ${msg.actionLabel || formatAction(msg.action)}`);
+      moveEvent.value = null; // clear old arrow
       break;
 
     case "action_result":
@@ -306,6 +324,8 @@ function resetGame() {
   bossExamResults.value = [];
   bossExamScorecard.value = null;
   currentBossIndex.value = 0;
+  moveEvent.value = null;
+  currentActorId.value = "";
 }
 
 // ── Lifecycle ────────────────────────────────────────────
@@ -346,6 +366,9 @@ onUnmounted(() => {
     :current-boss-emoji="currentBossEmoji"
     :current-boss-name="currentBossName"
     :boss-exam-bosses="bossExamBosses"
+    :arena="arena"
+    :move-event="moveEvent"
+    :actor-id="currentActorId"
     @action="sendAction"
     @reset="resetGame"
   />

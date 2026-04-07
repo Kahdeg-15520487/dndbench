@@ -365,13 +365,13 @@ class GameSession {
 
     this.bossExamIndex++;
 
-    // Small delay then next boss
-    if (this.bossExamIndex < BOSS_RUSH_ORDER.length) {
-      // Wait for client to say "continue" or auto-advance
-      // For now, auto-advance after a short delay
-    }
-
+    // Send scorecard (includes allDone flag)
     this.sendBossExamResults();
+
+    // Auto-advance to next boss after a short delay
+    if (this.bossExamIndex < BOSS_RUSH_ORDER.length) {
+      setTimeout(() => this.runNextBossExam(), 2000);
+    }
   }
 
   private sendBossExamResults() {
@@ -451,6 +451,9 @@ class GameSession {
       targetId: raw.target === "self" ? "player" : (this.bossExamActive ? "boss" : "enemy"),
       spellId: raw.spellId,
       itemId: raw.itemId,
+      move: (raw as any).move_dx !== undefined || (raw as any).move_dy !== undefined
+        ? { dx: (raw as any).move_dx || 0, dy: (raw as any).move_dy || 0 }
+        : undefined,
     };
 
     this.humanAgent.submitAction(action);

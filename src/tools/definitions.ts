@@ -10,25 +10,37 @@ const OBSERVATION_TOOLS: ToolDefinition[] = [
   {
     name: "inspect_self",
     description:
-      "Get your detailed stats: exact HP/MP percentages, status effects, defending state. Use this to assess your situation precisely.",
+      "Get your detailed stats: exact HP/MP percentages, status effects, defending state, position. Use this to assess your situation precisely.",
     parameters: {},
   },
   {
     name: "inspect_enemy",
     description:
-      "Get the enemy's detailed stats: HP/MP percentages, active status effects, defending state. Useful for deciding whether to be aggressive.",
+      "Get the enemy's detailed stats: HP/MP percentages, active status effects, defending state, position. Useful for deciding whether to be aggressive.",
     parameters: {},
+  },
+  {
+    name: "estimate_distance",
+    description:
+      "ROUGHLY estimate the distance to a target entity. Not exact — has ±15% margin. Returns approximate distance, direction, whether the target is likely in melee range, and which spells probably can/can't reach. Essential for deciding whether to move closer before attacking.",
+    parameters: {
+      target: {
+        type: "string",
+        description: "The entity to measure distance to (e.g. 'enemy').",
+        required: true,
+      },
+    },
   },
   {
     name: "review_spells",
     description:
-      "List all your spells with cooldown status and readiness. Helps you pick the right spell without wasting a turn on cooldown.",
+      "List all your spells with cooldown status, readiness, and range. Helps you pick the right spell without wasting a turn on cooldown.",
     parameters: {},
   },
   {
     name: "review_inventory",
     description:
-      "List your remaining items with quantities. Check this before using items to avoid wasting turns.",
+      "List your remaining items with quantities and range. Check this before using items to avoid wasting turns.",
     parameters: {},
   },
 ];
@@ -39,7 +51,7 @@ const ACTION_TOOLS: ToolDefinition[] = [
   {
     name: "attack",
     description:
-      "ACTION: Basic physical attack on the enemy. Damage scales with Strength. Can crit (Luck). Can be dodged (Speed). Commits your turn.",
+      "ACTION: Basic physical attack on the enemy. Melee range (1.5 units). Damage scales with Strength. Can crit (Luck). Can be dodged (Speed). Commits your turn.",
     parameters: {
       target: {
         type: "string",
@@ -57,7 +69,7 @@ const ACTION_TOOLS: ToolDefinition[] = [
   {
     name: "cast_spell",
     description:
-      "ACTION: Cast a spell (costs MP, may have cooldown). Damages, heals, buffs, or debuffs. Commits your turn.",
+      "ACTION: Cast a spell (costs MP, may have cooldown). Each spell has a range — if enemy is out of range the spell fails. Commits your turn.",
     parameters: {
       spell_id: {
         type: "string",
@@ -85,7 +97,7 @@ const ACTION_TOOLS: ToolDefinition[] = [
   {
     name: "use_item",
     description:
-      "ACTION: Use a consumable item from inventory. Commits your turn.",
+      "ACTION: Use a consumable item from inventory. Bombs have range 6, other items are self-use. Commits your turn.",
     parameters: {
       item_id: {
         type: "string",
