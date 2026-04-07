@@ -76,10 +76,10 @@ export class HeuristicAgent implements IAgent {
     if (me.hp < me.maxHp * 0.5) {
       const healSpell = me.spells.find(
         s => s.type === "heal" && s.currentCooldown === 0 && s.level > 0
+          && remainingSlots(me.spellSlots, s.level) > 0
       );
-      const hasSlots = healSpell && totalRemainingSlots(me.spellSlots) > 0;
-      if (hasSlots && Math.random() > 0.4) {
-        return { type: "cast_spell", actorId: this.id, targetId: this.id, spellId: healSpell!.id };
+      if (healSpell && Math.random() > 0.4) {
+        return { type: "cast_spell", actorId: this.id, targetId: this.id, spellId: healSpell.id };
       }
     }
 
