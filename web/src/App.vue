@@ -8,12 +8,15 @@ import BattleView from "./components/BattleView.vue";
 interface CharState {
   id: string;
   name: string;
+  team: string;
+  class: string;
   hp: number;
   maxHp: number;
   mp: number;
   maxMp: number;
   statusEffects: { type: string; turnsRemaining: number }[];
   isDefending: boolean;
+  position?: { x: number; y: number };
   spells: { id: string; name: string; currentCooldown: number }[];
   inventory: { id: string; name: string; quantity: number }[];
 }
@@ -22,10 +25,6 @@ interface ChatMessage {
   id: number;
   type: "system" | "player" | "enemy" | "status" | "info" | "error" | "thinking";
   text: string;
-  /** For thinking messages: which step index */
-  stepIndex?: number;
-  /** For thinking messages: tool name */
-  toolName?: string;
 }
 
 // ── State ────────────────────────────────────────────────
@@ -36,13 +35,13 @@ const myTurn = ref(false);
 const enemyThinking = ref(false);
 const thinkingSteps = ref<Array<{ text: string; toolName?: string; type: string }>>([]);
 const turnNumber = ref(0);
-const playerId = ref("");
-const enemyId = ref("");
-const playerClass = ref("");
-const enemyClass = ref("");
 const winner = ref<string | null>(null);
 const winnerReason = ref("");
-const gameCategory = ref<"1v1" | "boss_exam">("1v1");
+const gameCategory = ref<"1v1" | "boss_exam" | "scenario">("1v1");
+
+// N-unit state
+const characters = ref<CharState[]>([]);
+const humanIds = ref<string[]>([]);
 
 // Boss exam state
 const bossExamBosses = ref<Array<{ id: string; name: string; emoji: string; title: string }>>([]);
@@ -57,31 +56,21 @@ const arena = ref<{ width: number; height: number; label: string }>({ width: 20,
 const moveEvent = ref<{ actorId: string; from: { x: number; y: number }; to: { x: number; y: number }; distance: number } | null>(null);
 const currentActorId = ref<string>("");
 
-const player = reactive<CharState>({
-  id: "",
-  name: "",
-  hp: 0,
-  maxHp: 0,
-  mp: 0,
-  maxMp: 0,
-  statusEffects: [],
-  isDefending: false,
-  spells: [],
-  inventory: [],
+// Backward compat — player/enemy computed from characters array
+const player = computed(() => {
+  const pid = humanIds.value[0];
+  return characters.value.find(c => c.id === pid) || emptyChar();
 });
+const enemy = computed(() => {
+  const pid = humanIds.value[0];
+  return characters.value.find(c => c.id !== pid) || emptyChar();
+});
+const playerClass = computed(() => player.value.class);
+const enemyClass = computed(() => enemy.value.class);
 
-const enemy = reactive<CharState>({
-  id: "",
-  name: "",
-  hp: 0,
-  maxHp: 0,
-  mp: 0,
-  maxMp: 0,
-  statusEffects: [],
-  isDefending: false,
-  spells: [],
-  inventory: [],
-});
+function emptyChar(): CharState {
+  return { id: "", name: "", team: "", class: "", hp: 0, maxHp: 0, mp: 0, maxMp: 0, statusEffects: [], isDefending: false, spells: [], inventory: [] };
+}
 
 const messages = ref<ChatMessage[]>([]);
 let msgId = 0;
@@ -124,12 +113,17 @@ function handleServerMessage(msg: any) {
       break;
 
     case "battle_start":
-      playerId.value = msg.playerId;
-      enemyId.value = msg.enemyId;
-      playerClass.value = msg.playerClass;
-      enemyClass.value = msg.enemyClass;
+      // New format: humanIds array + characters array
+      if (msg.humanIds) {
+        humanIds.value = msg.humanIds;
+      } else {
+        // Legacy: playerId / enemyId
+        humanIds.value = [msg.playerId];
+      }
+      if (msg.characters) {
+        characters.value = msg.characters;
+      }
       if (msg.arena) arena.value = msg.arena;
-      updateState(msg.state);
       phase.value = "battle";
       moveEvent.value = null;
       break;
@@ -137,13 +131,11 @@ function handleServerMessage(msg: any) {
     case "turn_start":
       turnNumber.value = msg.turnNumber;
       currentActorId.value = msg.actorId;
-      updateState(msg.state);
       break;
 
     case "your_turn":
       myTurn.value = true;
       enemyThinking.value = false;
-      updateState(msg.state);
       break;
 
     case "move":
@@ -157,16 +149,12 @@ function handleServerMessage(msg: any) {
 
     case "action_chosen":
       addMessage("system", `→ ${msg.actionLabel || formatAction(msg.action)}`);
-      moveEvent.value = null; // clear old arrow
+      moveEvent.value = null;
       break;
 
     case "action_result":
       myTurn.value = false;
       addMessage("player", msg.narrative);
-      if (msg.result?.damage?.damage > 0) {
-        updateState(msg.state);
-      }
-      updateState(msg.state);
       break;
 
     case "enemy_thinking":
@@ -187,7 +175,16 @@ function handleServerMessage(msg: any) {
       enemyThinking.value = false;
       thinkingSteps.value = [];
       addMessage("enemy", msg.narrative);
-      updateState(msg.state);
+      break;
+
+    case "state_update":
+      if (msg.characters) {
+        characters.value = msg.characters;
+      }
+      break;
+
+    case "character_defeated":
+      addMessage("status", `💀 ${msg.characterId} has fallen!`);
       break;
 
     case "status":
@@ -207,9 +204,7 @@ function handleServerMessage(msg: any) {
       enemyThinking.value = false;
       winner.value = msg.winner;
       winnerReason.value = msg.reason;
-      updateState(msg.state);
       if (gameCategory.value === "boss_exam") {
-        // Don't show "ended" yet — scorecard will follow
         addMessage("system", `🏁 ${msg.reason}`);
       } else {
         phase.value = "ended";
@@ -219,6 +214,7 @@ function handleServerMessage(msg: any) {
 
     case "boss_exam_start":
       phase.value = "boss_exam";
+      gameCategory.value = "boss_exam";
       bossExamBosses.value = msg.bosses;
       bossExamResults.value = [];
       bossExamScorecard.value = null;
@@ -260,15 +256,6 @@ function handleServerMessage(msg: any) {
   }
 }
 
-function updateState(state: any) {
-  if (!state?.characters) return;
-  for (const c of state.characters) {
-    const target = c.id === playerId.value ? player : enemy;
-    Object.assign(target, c);
-  }
-  turnNumber.value = state.turnNumber || turnNumber.value;
-}
-
 function addMessage(type: ChatMessage["type"], text: string) {
   messages.value.push({ id: ++msgId, type, text });
 }
@@ -297,6 +284,14 @@ function startBattle(config: { name: string; charClass: string; enemyMode: strin
   }
 }
 
+function startScenario(config: { participants: any[]; arena?: string; winCondition?: string; llmConfigId?: number }) {
+  gameCategory.value = "scenario";
+  send({
+    type: "start_scenario",
+    ...config,
+  });
+}
+
 function sendAction(action: { type: string; spellId?: string; itemId?: string; target?: string }) {
   myTurn.value = false;
   send({ type: "action", action });
@@ -321,6 +316,8 @@ function resetGame() {
   enemyThinking.value = false;
   thinkingSteps.value = [];
   turnNumber.value = 0;
+  characters.value = [];
+  humanIds.value = [];
   bossExamResults.value = [];
   bossExamScorecard.value = null;
   currentBossIndex.value = 0;
@@ -344,9 +341,12 @@ onUnmounted(() => {
     v-if="phase === 'setup'"
     :connected="connected"
     @start="startBattle"
+    @start-scenario="startScenario"
   />
   <BattleView
     v-else
+    :characters="characters"
+    :human-ids="humanIds"
     :player="player"
     :enemy="enemy"
     :player-class="playerClass"
