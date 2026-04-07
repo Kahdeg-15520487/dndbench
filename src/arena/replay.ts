@@ -160,11 +160,19 @@ function renderMarkdown(
       // HP snapshot from the state at end of turn
       const snap = turn.stateSnapshot;
       if (snap) {
-        const hpLine = snap.characters
-          .map((c) => `**${c.name}**: ${hpBar(c.hp, c.maxHp)} ${c.hp}/${c.maxHp} HP, ${c.mp}/${c.maxMp} MP @ (${c.position.x.toFixed(1)},${c.position.y.toFixed(1)})`)
-          .join(" | ");
         lines.push("");
-        lines.push(hpLine);
+        lines.push("| Name | HP | MP | Position | Status |");
+        lines.push("|------|-----|-----|----------|--------|");
+        for (const c of snap.characters) {
+          const bar = hpBar(c.hp, c.maxHp);
+          const hp = `${bar} ${c.hp}/${c.maxHp}`;
+          const mp = `${c.mp}/${c.maxMp}`;
+          const pos = `(${c.position.x.toFixed(1)},${c.position.y.toFixed(1)})`;
+          const status = c.statusEffects.length > 0
+            ? c.statusEffects.map((e: any) => typeof e === "string" ? e : e.type).join(", ")
+            : "";
+          lines.push(`| **${c.name}** | ${hp} | ${mp} | ${pos} | ${status} |`);
+        }
       }
 
       // Battlefield image — inline at end of turn
