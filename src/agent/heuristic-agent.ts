@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────
 //  Heuristic Agent — rule-based AI, no LLM needed
+//  Supports multi-unit battles with team-aware targeting.
 // ─────────────────────────────────────────────────────────
 
 import { IAgent } from "./interface.js";
@@ -7,7 +8,6 @@ import {
   BattleStateSnapshot,
   CombatAction,
   CombatResult,
-  MoveVector,
   distance,
   moveToward,
 } from "../engine/types.js";
@@ -26,14 +26,23 @@ export class HeuristicAgent implements IAgent {
 
   async getAction(snapshot: BattleStateSnapshot): Promise<CombatAction> {
     const me = snapshot.characters.find((c) => c.id === this.id)!;
-    const enemy = snapshot.characters.find((c) => c.id !== this.id)!;
-    const dist = distance(me.position, enemy.position);
+    const enemies = snapshot.characters.filter((c) => c.team !== me.team);
+    const allies = snapshot.characters.filter((c) => c.team === me.team && c.id !== me.id);
+
+    // No enemies — do nothing
+    if (enemies.length === 0) {
+      return { type: "wait", actorId: this.id };
+    }
+
+    // Pick target: lowest HP% enemy (focus fire)
+    const target = this.pickTarget(me, enemies);
+    const dist = distance(me.position, target.position);
     const maxMove = 1.0 + 10 * 0.15; // rough speed estimate
 
-    // Helper: add movement toward enemy if out of range
+    // Helper: add movement toward target if out of range
     const withMove = (action: CombatAction, requiredRange: number): CombatAction => {
       if (dist > requiredRange) {
-        const move = moveToward(me.position, enemy.position, maxMove);
+        const move = moveToward(me.position, target.position, maxMove);
         if (move) action.move = move;
       }
       return action;
@@ -41,28 +50,24 @@ export class HeuristicAgent implements IAgent {
 
     // ── Low HP — prioritize survival ───────────────────
     if (me.hp < me.maxHp * 0.3) {
-      // Try heal spell
       const healSpell = me.spells.find(
         (s) => s.id === "heal" && s.currentCooldown === 0
       );
       if (healSpell && me.mp >= 15) {
         return { type: "cast_spell", actorId: this.id, targetId: this.id, spellId: "heal" };
       }
-      // Try health potion
       const potion = me.inventory.find(
         (i) => i.id === "health_potion" && i.quantity > 0
       );
       if (potion) {
         return { type: "use_item", actorId: this.id, itemId: "health_potion" };
       }
-      // Try elixir
       const elixir = me.inventory.find(
         (i) => i.id === "elixir" && i.quantity > 0
       );
       if (elixir) {
         return { type: "use_item", actorId: this.id, itemId: "elixir" };
       }
-      // Last resort: defend
       if (Math.random() > 0.5) {
         return { type: "defend", actorId: this.id };
       }
@@ -78,27 +83,25 @@ export class HeuristicAgent implements IAgent {
       }
     }
 
-    // ── Bomb if enemy healthy ──────────────────────────
+    // ── Bomb if target healthy ──────────────────────────
     const bomb = me.inventory.find((i) => i.id === "bomb" && i.quantity > 0);
-    if (bomb && enemy.hp > enemy.maxHp * 0.5 && Math.random() > 0.6) {
-      return withMove({ type: "use_item", actorId: this.id, itemId: "bomb" }, 6);
+    if (bomb && target.hp > target.maxHp * 0.5 && Math.random() > 0.6) {
+      return withMove(
+        { type: "use_item", actorId: this.id, targetId: target.id, itemId: "bomb" },
+        6,
+      );
     }
 
-    // ── Poison for attrition ──────────────────────────
+    // ── Poison for attrition ───────────────────────────
     const poisonSpell = me.spells.find(
-      (s) =>
-        s.id === "poison" &&
-        s.currentCooldown === 0 &&
-        me.mp >= s.mpCost
+      (s) => s.id === "poison" && s.currentCooldown === 0 && me.mp >= s.mpCost
     );
-    const enemyNotPoisoned = !enemy.statusEffects.some(
-      (e) => e.type === "poison"
-    );
-    if (poisonSpell && enemyNotPoisoned && Math.random() > 0.5) {
+    const targetNotPoisoned = !target.statusEffects.some((e) => e.type === "poison");
+    if (poisonSpell && targetNotPoisoned && Math.random() > 0.5) {
       return withMove({
         type: "cast_spell",
         actorId: this.id,
-        targetId: enemy.id,
+        targetId: target.id,
         spellId: "poison",
       }, poisonSpell.range);
     }
@@ -115,7 +118,7 @@ export class HeuristicAgent implements IAgent {
       return withMove({
         type: "cast_spell",
         actorId: this.id,
-        targetId: enemy.id,
+        targetId: target.id,
         spellId: spell.id as any,
       }, spell.range);
     }
@@ -142,16 +145,26 @@ export class HeuristicAgent implements IAgent {
       return { type: "defend", actorId: this.id };
     }
 
-    // ── Default: attack ───────────────────────────────
+    // ── Default: attack target ────────────────────────
     return withMove(
-      { type: "attack", actorId: this.id, targetId: enemy.id },
-      MELEE_RANGE
+      { type: "attack", actorId: this.id, targetId: target.id },
+      MELEE_RANGE,
     );
   }
 
+  /** Pick target: focus-fire lowest HP% enemy */
+  private pickTarget(
+    me: BattleStateSnapshot["characters"][0],
+    enemies: BattleStateSnapshot["characters"],
+  ): BattleStateSnapshot["characters"][0] {
+    // Sort by HP% ascending — weakest first
+    const sorted = [...enemies].sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp));
+    // 70% chance: focus weakest. 30%: random
+    if (Math.random() < 0.7) return sorted[0];
+    return enemies[Math.floor(Math.random() * enemies.length)];
+  }
+
   onActionResult(_result: CombatResult): void {}
-
   onBattleEnd(_winner?: string, _reason?: string): void {}
-
   destroy(): void {}
 }
