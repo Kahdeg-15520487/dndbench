@@ -13,7 +13,8 @@
     "battle:2v2": "tsx src/index.ts -p \"Alpha,warrior,red,heuristic\" \"Beta,mage,red,heuristic\" \"Gamma,rogue,blue,heuristic\" \"Delta,paladin,blue,heuristic\" --delay 800",
     "battle:raid": "tsx src/index.ts -p \"Tank,paladin,raid,heuristic\" \"DPS,rogue,raid,heuristic\" \"Mage,mage,raid,heuristic\" \"Bruiser,warrior,raid,heuristic\" \"Dragon,ancient_dragon,boss,boss\" --delay 800",
     "battle:ffa": "tsx src/index.ts -p \"Alpha,warrior,a,heuristic\" \"Beta,mage,b,heuristic\" \"Gamma,rogue,c,heuristic\" \"Delta,paladin,d,heuristic\" --delay 800 --win last_unit_standing",
-    "test": "tsx src/index.ts --mode mock --delay 0 --max-turns 10 --quiet",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "dev:db": "docker compose up -d db && docker compose exec db sh -c 'until pg_isready -U arena -d arena01; do sleep 1; done'",
     "dev:server": "tsx src/server.ts",
     "dev:client": "vite web/",
@@ -46,6 +47,7 @@
     "concurrently": "^9.2.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
-    "vite": "^8.0.3"
+    "vite": "^8.0.3",
+    "vitest": "^4.1.3"
   }
 }

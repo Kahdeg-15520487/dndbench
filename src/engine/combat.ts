@@ -128,11 +128,21 @@ function resolveAttack(
     };
   }
 
-  // Check if defender is paralyzed (auto-crit)
-  const isParalyzed = defender.statusEffects.some(e => e.type === "paralyzed");
-
   const weapon = attacker.weapon;
   const mainAttack = resolveSingleAttack(attacker, defender, weapon, dice, `${attacker.name} → ${defender.name}`);
+
+  // Attacks against paralyzed targets auto-crit and auto-hit
+  const isParalyzed = defender.statusEffects.some(e => e.type === "paralyzed");
+  if (isParalyzed) {
+    mainAttack.hit = true;
+    if (!mainAttack.critical) {
+      mainAttack.critical = true;
+      // Re-roll damage with double dice
+      const dmgResult = rollWeaponDamage(weapon, attacker, dice, true, `${attacker.name} → ${defender.name} (paralyzed crit)`);
+      mainAttack.damage = dmgResult.total;
+      mainAttack.damageRolls = dmgResult.rolls;
+    }
+  }
 
   let totalDamage = mainAttack.damage;
   const allDamageRolls = [...mainAttack.damageRolls];
@@ -601,6 +611,7 @@ function resolveItem(
   }
 
   if (item.type === "full_restore") {
+    const healed = target.stats.maxHp - target.stats.hp;
     target.stats.hp = target.stats.maxHp;
     for (const k of Object.keys(target.spellSlots)) {
       target.spellSlots[Number(k)].used = 0;
@@ -609,8 +620,8 @@ function resolveItem(
     return {
       action, actorId: user.id, targetId: target.id,
       narrative: `${user.name} uses ${item.name}! Fully restored!`,
-      heal: { amount: target.stats.maxHp - target.stats.hp, targetHp: target.stats.hp, targetMaxHp: target.stats.maxHp },
-      item: { itemName: item.name, effect: "full_restore", value: 0, remaining: item.quantity },
+      heal: { amount: healed, targetHp: target.stats.hp, targetMaxHp: target.stats.maxHp },
+      item: { itemName: item.name, effect: "full_restore", value: healed, remaining: item.quantity },
     };
   }
 
