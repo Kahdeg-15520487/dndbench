@@ -4,15 +4,7 @@
 
 import type { BattleEvent, BattleEventHandler } from "./battle-runner.js";
 import type { WebSocket } from "ws";
-import {
-  BattleStateSnapshot,
-  CombatResult,
-  CombatAction,
-  ArenaConfig,
-} from "../engine/types.js";
-import {
-  createSnapshot,
-} from "../engine/index.js";
+import type { Character } from "../engine/types.js";
 
 /**
  * Create an event handler that forwards battle events as JSON
@@ -22,33 +14,36 @@ import {
  *
  *   Server → Client:
  *     connected        — connection established
- *     battle_start     — battle initialized, includes full state
+ *     battle_start     — battle initialized, includes full state + arena
  *     turn_start       — a character's turn begins
  *     your_turn        — human player needs to choose action
  *     enemy_thinking   — AI/LLM turn is resolving
+ *     move             — character moved on battlefield
+ *     action_chosen    — what action was chosen
  *     action_result    — a player action resolved
  *     enemy_result     — enemy action resolved
  *     status           — status effect tick
+ *     state_update     — full character state after each action
  *     battle_end       — battle concluded
  *     error            — something went wrong
  *
  *   Client → Server:
- *     start_battle     — initiate a new battle
+ *     start_battle     — initiate a new 1v1 battle
+ *     start_scenario   — initiate N-unit scenario
+ *     start_boss_exam  — initiate boss exam
  *     action           — human submits their action choice
  */
 export function createWsRenderer(
   ws: WebSocket,
-  playerCharacterId: string,
-  enemyCharacterId: string = "enemy"
+  humanCharacterIds: string | string[] = "player",
 ): BattleEventHandler {
+  const humanIds = Array.isArray(humanCharacterIds) ? humanCharacterIds : [humanCharacterIds];
+
   return (event: BattleEvent) => {
     switch (event.type) {
       case "battle_start":
         send("battle_start", {
-          playerId: playerCharacterId,
-          enemyId: enemyCharacterId,
-          playerClass: event.characters.find((c) => c.id === playerCharacterId)?.class || "",
-          enemyClass: event.characters.find((c) => c.id === enemyCharacterId)?.class || "boss",
+          humanIds,
           arena: event.arena,
           characters: event.characters.map(serializeCharacter),
         });
@@ -58,13 +53,18 @@ export function createWsRenderer(
         break;
 
       case "turn_start": {
-        const isPlayer = event.actorId === playerCharacterId;
+        const isHuman = humanIds.includes(event.actorId);
         send("turn_start", {
           turnNumber: event.turnNumber,
           actorId: event.actorId,
         });
-        if (!isPlayer) {
-          send("enemy_thinking", { turnNumber: event.turnNumber });
+        if (isHuman) {
+          send("your_turn", {
+            turnNumber: event.turnNumber,
+            actorId: event.actorId,
+          });
+        } else {
+          send("enemy_thinking", { turnNumber: event.turnNumber, actorId: event.actorId });
         }
         break;
       }
@@ -79,21 +79,19 @@ export function createWsRenderer(
         break;
 
       case "action_chosen": {
-        const isPlayer = event.actorId === playerCharacterId;
+        const isHuman = humanIds.includes(event.actorId);
         send("action_chosen", {
           actorId: event.actorId,
           action: event.action,
           actionLabel: formatAction(event.action),
+          isHuman,
         });
-        if (isPlayer) {
-          // confirm to player what they chose
-        }
         break;
       }
 
       case "action_result": {
-        const isPlayer = event.actorId === playerCharacterId;
-        const type = isPlayer ? "action_result" : "enemy_result";
+        const isHuman = humanIds.includes(event.actorId);
+        const type = isHuman ? "action_result" : "enemy_result";
         send(type, {
           narrative: event.result.narrative,
           result: event.result,
@@ -115,13 +113,16 @@ export function createWsRenderer(
         break;
 
       case "character_defeated":
-        // will be followed by battle_end
+        send("character_defeated", {
+          characterId: event.characterId,
+        });
         break;
 
       case "battle_end":
         send("battle_end", {
           winner: event.winner || "draw",
           reason: event.reason,
+          winningTeam: (event as any).winningTeam || event.winner,
         });
         break;
     }
@@ -146,12 +147,11 @@ function formatAction(action: import("../engine/types.js").CombatAction): string
 
 // ── Serialization ──────────────────────────────────────
 
-import type { Character } from "../engine/types.js";
-
 function serializeCharacter(char: Character) {
   return {
     id: char.id,
     name: char.name,
+    team: char.team,
     class: char.class,
     hp: char.stats.hp,
     maxHp: char.stats.maxHp,
@@ -176,17 +176,4 @@ function serializeCharacter(char: Character) {
     })),
     inventory: char.inventory.map((i) => ({ id: i.id, name: i.name, quantity: i.quantity })),
   };
-}
-
-/**
- * Build a BattleStateSnapshot from a set of characters.
- * Used by GameSession to send state alongside events.
- */
-export function buildSnapshot(
-  characters: Character[],
-  turnNumber: number,
-  phase: "ongoing" | "finished",
-  arena: ArenaConfig
-): BattleStateSnapshot {
-  return createSnapshot(characters, turnNumber, phase, arena);
 }

@@ -157,7 +157,7 @@ if (fs.existsSync(staticPath)) {
 const wss = new WebSocketServer({ server });
 
 interface ClientMessage {
-  type: "start_battle" | "start_boss_exam" | "action";
+  type: "start_battle" | "start_boss_exam" | "start_scenario" | "action";
   name?: string;
   class?: string;
   enemyMode?: string;
@@ -169,6 +169,16 @@ interface ClientMessage {
     itemId?: string;
     target?: string;
   };
+  // Scenario mode
+  participants?: Array<{
+    name: string;
+    role: string;
+    team: string;
+    agent: string;
+    model?: string;
+  }>;
+  arena?: string;
+  winCondition?: string;
 }
 
 /**
@@ -187,6 +197,10 @@ class GameSession {
   private playerChar?: Character;
   private enemyChar?: Character;
   private startTime = 0;
+
+  // Scenario mode state
+  private scenarioCharacters?: Character[];
+  private scenarioAgents?: IAgent[];
 
   // Boss exam state
   private bossExamActive = false;
@@ -212,6 +226,9 @@ class GameSession {
           break;
         case "start_boss_exam":
           this.startBossExam(msg);
+          break;
+        case "start_scenario":
+          this.startScenario(msg);
           break;
         case "action":
           this.handleHumanAction(msg);
@@ -326,7 +343,7 @@ class GameSession {
 
     this.startTime = Date.now();
 
-    const wsRenderer = createWsRenderer(this.ws, "player", "boss");
+    const wsRenderer = createWsRenderer(this.ws, "player");
 
     this.runner = new BattleRunner(
       [this.playerChar, this.enemyChar],
@@ -413,6 +430,96 @@ class GameSession {
     return "F";
   }
 
+  // ── Scenario Mode (N-unit battle) ──────────────────
+
+  private async startScenario(msg: ClientMessage) {
+    const participantConfigs = msg.participants;
+    if (!participantConfigs || participantConfigs.length < 2) {
+      this.send("error", { message: "Need at least 2 participants" });
+      return;
+    }
+
+    const BOSS_IDS = new Set(["goblin_king", "dark_wizard", "ancient_dragon", "lich_lord", "demon_lord"]);
+    const CLASS_IDS = new Set(["warrior", "mage", "rogue", "paladin"]);
+
+    // Build characters and agents
+    const characters: Character[] = [];
+    const agents: IAgent[] = [];
+    const humanIds: string[] = [];
+
+    for (let i = 0; i < participantConfigs.length; i++) {
+      const cfg = participantConfigs[i];
+      const id = `unit${i + 1}`;
+
+      // Validate role
+      if (!CLASS_IDS.has(cfg.role) && !BOSS_IDS.has(cfg.role)) {
+        this.send("error", { message: `Invalid role: ${cfg.role}` });
+        return;
+      }
+
+      let char: Character;
+      if (BOSS_IDS.has(cfg.role)) {
+        char = createBoss(cfg.role as any);
+        char.name = cfg.name;
+        char.team = cfg.team;
+      } else {
+        char = createCharacter(id, cfg.name, cfg.role as any, { x: 0, y: 0 }, cfg.team);
+      }
+      characters.push(char);
+
+      // Create agent
+      let agent: IAgent;
+      switch (cfg.agent) {
+        case "human": {
+          const human = new HumanAgent(id, cfg.name);
+          humanIds.push(id);
+          agent = human;
+          this.humanAgent = human; // store for action submission
+          break;
+        }
+        case "llm": {
+          agent = await this.createLLMAgent(id, cfg.name, cfg.role, cfg.model, msg.llmConfigId);
+          break;
+        }
+        case "boss": {
+          agent = new BossAgent(id, cfg.name, cfg.role as any);
+          break;
+        }
+        default: {
+          agent = new HeuristicAgent(id, cfg.name);
+          break;
+        }
+      }
+      agents.push(agent);
+    }
+
+    // Pick arena
+    const { ARENA_PRESETS, autoArenaPreset } = await import("./engine/types.js");
+    const arena = msg.arena && ARENA_PRESETS[msg.arena as keyof typeof ARENA_PRESETS]
+      ? ARENA_PRESETS[msg.arena as keyof typeof ARENA_PRESETS]
+      : autoArenaPreset(participantConfigs.length);
+
+    this.startTime = Date.now();
+
+    const wsRenderer = createWsRenderer(this.ws, humanIds.length > 0 ? humanIds : "player");
+
+    this.runner = new BattleRunner(characters, agents, {
+      maxTurns: 50,
+      turnDelayMs: 0,
+      eventHandler: wsRenderer,
+      arena,
+      winCondition: msg.winCondition as any,
+    });
+
+    // Store references for replay
+    this.playerChar = characters[0];
+    this.enemyChar = characters[characters.length > 1 ? 1 : 0];
+    this.scenarioCharacters = characters;
+    this.scenarioAgents = agents;
+
+    this.runBattle();
+  }
+
   // ── Shared Battle Runner ───────────────────────────
 
   private async runBattle() {
@@ -445,10 +552,25 @@ class GameSession {
     if (!msg.action || !this.humanAgent) return;
 
     const raw = msg.action;
+    const actorId = this.humanAgent.id;
+
+    // Resolve target: "self" → own ID, otherwise look up by name or pass as-is
+    let targetId: string | undefined;
+    if (raw.target === "self") {
+      targetId = actorId;
+    } else if (raw.target) {
+      // Try to resolve by name in scenario characters
+      const chars = this.scenarioCharacters || (this.playerChar && this.enemyChar ? [this.playerChar, this.enemyChar] : []);
+      const found = chars.find((c) => c.name.toLowerCase() === raw.target!.toLowerCase());
+      targetId = found?.id ?? raw.target;
+    } else {
+      targetId = this.bossExamActive ? "boss" : "enemy";
+    }
+
     const action: CombatAction = {
       type: raw.type as CombatAction["type"],
-      actorId: "player",
-      targetId: raw.target === "self" ? "player" : (this.bossExamActive ? "boss" : "enemy"),
+      actorId,
+      targetId,
       spellId: raw.spellId,
       itemId: raw.itemId,
       move: (raw as any).move_dx !== undefined || (raw as any).move_dy !== undefined
@@ -495,6 +617,40 @@ class GameSession {
     return new HeuristicAgent("enemy", "AI Opponent");
   }
 
+  /** Create an LLM agent with thinking callback for scenario mode */
+  private async createLLMAgent(
+    id: string,
+    name: string,
+    charClass: string,
+    model?: string,
+    llmConfigId?: number,
+  ): Promise<IAgent> {
+    let config = llmConfigId
+      ? await db.getLLMConfig(llmConfigId)
+      : await db.getDefaultLLMConfig();
+
+    const finalModel = model || config?.model || process.env.LLM_MODEL || "gpt-4o-mini";
+    const apiKey = config?.apiKey || process.env.LLM_API_KEY || "sk-placeholder";
+    const baseUrl = config?.baseUrl || process.env.LLM_BASE_URL || "https://api.openai.com/v1";
+
+    return new LLMAgent({
+      id,
+      name,
+      characterClass: charClass,
+      model: finalModel,
+      apiKey,
+      baseURL: baseUrl,
+      onThinking: (step) => {
+        this.send("enemy_thinking_step", {
+          type: step.type,
+          text: step.text,
+          toolName: step.toolName,
+          toolResult: step.toolResult,
+        });
+      },
+    });
+  }
+
   // ── Helpers ─────────────────────────────────────────
 
   private send(type: string, data: Record<string, unknown> = {}) {
@@ -506,6 +662,14 @@ class GameSession {
   destroy() {
     this.humanAgent?.destroy();
     this.enemyAgent?.destroy?.();
+    // Clean up scenario agents
+    if (this.scenarioAgents) {
+      for (const agent of this.scenarioAgents) {
+        if (agent !== this.humanAgent && agent !== this.enemyAgent) {
+          agent.destroy?.();
+        }
+      }
+    }
   }
 }
 
