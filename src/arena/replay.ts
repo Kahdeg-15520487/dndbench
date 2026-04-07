@@ -53,23 +53,36 @@ function renderMarkdown(
   const agentMap = new Map(agents.map((a) => [a.id, a]));
   const charMap = new Map(characters.map((c) => [c.id, c]));
 
-  const a1 = characters[0];
-  const a2 = characters[1];
-  const ag1 = agentMap.get(a1.id);
-  const ag2 = agentMap.get(a2.id);
-  const matchup = `${a1.name} (${a1.class}) vs ${a2.name} (${a2.class})`;
+  // Title — list all character names
+  const matchup = characters.map((c) => `${c.name} (${c.class})`).join(" vs ");
   const winner = log.winner ? charMap.get(log.winner)?.name ?? log.winner : "Draw";
 
   // ── Header ──
   lines.push(`# ⚔️ ${matchup}`);
   lines.push("");
-  lines.push(`| | ${a1.name} | ${a2.name} |`);
-  lines.push(`|---|---|---|`);
-  lines.push(`| **Class** | ${a1.class} | ${a2.class} |`);
-  lines.push(`| **Agent** | ${agentLabel(ag1)} | ${agentLabel(ag2)} |`);
-  lines.push(`| **HP** | ${a1.stats.hp}/${a1.stats.maxHp} | ${a2.stats.hp}/${a2.stats.maxHp} |`);
-  lines.push(`| **MP** | ${a1.stats.mp}/${a1.stats.maxMp} | ${a2.stats.mp}/${a2.stats.maxMp} |`);
-  lines.push(`| **STR/DEF/MAG/SPD/LCK** | ${a1.stats.strength}/${a1.stats.defense}/${a1.stats.magic}/${a1.stats.speed}/${a1.stats.luck} | ${a2.stats.strength}/${a2.stats.defense}/${a2.stats.magic}/${a2.stats.speed}/${a2.stats.luck} |`);
+
+  // Team info
+  const teams = new Set(characters.map((c) => c.team));
+  if (teams.size > 1) {
+    for (const team of teams) {
+      const members = characters.filter((c) => c.team === team);
+      lines.push(`**Team \"${team}\"**: ${members.map((c) => c.name).join(", ")}`);
+    }
+    lines.push("");
+  }
+
+  // Stats table — N columns
+  const cols = characters.map((c) => c.name);
+  const sep = characters.map(() => "---").join(" | ");
+  const ag = agents;
+  lines.push(`| | ${cols.join(" | ")} |`);
+  lines.push(`|---| ${sep} |`);
+  lines.push(`| **Class** | ${characters.map((c) => c.class).join(" | ")} |`);
+  lines.push(`| **Team** | ${characters.map((c) => c.team).join(" | ")} |`);
+  lines.push(`| **Agent** | ${characters.map((c) => agentLabel(ag.find((a) => a.id === c.id))).join(" | ")} |`);
+  lines.push(`| **HP** | ${characters.map((c) => `${c.stats.maxHp}`).join(" | ")} |`);
+  lines.push(`| **MP** | ${characters.map((c) => `${c.stats.maxMp}`).join(" | ")} |`);
+  lines.push(`| **STR/DEF/MAG/SPD/LCK** | ${characters.map((c) => `${c.stats.strength}/${c.stats.defense}/${c.stats.magic}/${c.stats.speed}/${c.stats.luck}`).join(" | ")} |`);
   lines.push("");
   lines.push(`- **Winner**: ${winner}`);
   lines.push(`- **Turns**: ${log.totalTurns}`);
@@ -99,7 +112,7 @@ function renderMarkdown(
 
       // Action details
       const act = result.action;
-      lines.push(`- **Action**: ${formatAction(act)}`);
+      lines.push(`- **Action**: ${formatAction(act, charMap)}`);
 
       // Movement
       if (result.move) {
@@ -195,8 +208,9 @@ function renderMarkdown(
   const lastSnap = log.turns.at(-1)?.stateSnapshot;
   if (lastSnap) {
     for (const c of lastSnap.characters) {
-      lines.push(`### ${c.name}${log.winner === c.id ? " 🏆" : ""}`);
-      lines.push(`- HP: ${c.hp}/${c.maxHp}  MP: ${c.mp}/${c.maxMp}`);
+      const isWinner = log.winner === c.id || (c.team && log.winner === c.team);
+      lines.push(`### ${c.name}${isWinner ? " 🏆" : ""}`);
+      lines.push(`- HP: ${c.hp}/${c.maxHp}  MP: ${c.mp}/${c.maxMp}  Team: ${c.team}`);
       if (c.statusEffects.length > 0) {
         lines.push(`- Status: ${c.statusEffects.map((e) => `${e.type} (${e.turnsRemaining}t)`).join(", ")}`);
       }
@@ -229,11 +243,14 @@ function buildPath(
   return path.resolve(dir, filename);
 }
 
-function formatAction(action: import("../engine/types.js").CombatAction): string {
+function formatAction(action: import("../engine/types.js").CombatAction, charMap?: Map<string, Character>): string {
   const parts: string[] = [action.type];
   if (action.spellId) parts.push(`spell="${action.spellId}"`);
   if (action.itemId) parts.push(`item="${action.itemId}"`);
-  if (action.targetId) parts.push(`target="${action.targetId}"`);
+  if (action.targetId) {
+    const targetName = charMap?.get(action.targetId)?.name ?? action.targetId;
+    parts.push(`target="${targetName}"`);
+  }
   return parts.join(" ");
 }
 
