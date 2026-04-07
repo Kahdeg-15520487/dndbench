@@ -5,6 +5,10 @@
 //
 //  CLI is just a renderer. BattleRunner is the engine.
 //  Same runner powers WebSocket games in server.ts.
+//
+//  Supports any scenario via --participants:
+//    "Name,role,team,agentType[,model]"
+//  Legacy --a1/--a2 flags still work for quick 1v1.
 // ─────────────────────────────────────────────────────────
 
 import { createCharacter } from "./engine/characters.js";
@@ -14,6 +18,14 @@ import type { IAgent } from "./agent/index.js";
 import { BattleRunner } from "./arena/battle-runner.js";
 import { createCliRenderer, printBattleSummary } from "./arena/cli-renderer.js";
 import { saveReplay } from "./arena/replay.js";
+import {
+  type ParticipantConfig,
+  type AgentType,
+  type CharacterRole,
+  type ArenaConfig,
+  autoArenaPreset,
+  ARENA_PRESETS,
+} from "./engine/types.js";
 import chalk from "chalk";
 import fs from "fs";
 import path from "path";
@@ -23,6 +35,7 @@ import path from "path";
 const args = process.argv.slice(2);
 
 interface CliOptions {
+  // Legacy 1v1 flags
   agent1Class: string;
   agent1Name: string;
   agent1Model: string;
@@ -30,6 +43,12 @@ interface CliOptions {
   agent2Name: string;
   agent2Model: string;
   mode: string;
+
+  // Scenario flags
+  participants: string[];       // --participants "Name,role,team,agent[,model]"
+  arena: string;                // --arena small|medium|large|boss_room|grand
+  winCondition: string;         // --win last_team_standing|last_unit_standing
+
   maxTurns: number;
   delay: number;
   outputFile?: string;
@@ -45,6 +64,9 @@ function parseArgs(args: string[]): CliOptions {
     agent2Name: "Beta",
     agent2Model: "gpt-4o-mini",
     mode: "mock",
+    participants: [],
+    arena: "",
+    winCondition: "last_team_standing",
     maxTurns: 30,
     delay: 1500,
     bossExam: false,
@@ -64,6 +86,14 @@ function parseArgs(args: string[]): CliOptions {
       case "--delay": opts.delay = parseInt(args[++i]); break;
       case "--output": case "-o": opts.outputFile = args[++i]; break;
       case "--boss-exam": opts.bossExam = true; break;
+      case "--arena": opts.arena = args[++i]; break;
+      case "--win": opts.winCondition = args[++i]; break;
+      case "--participants": case "-p":
+        // Collect all following args until next flag
+        while (i + 1 < args.length && !args[i + 1].startsWith("-")) {
+          opts.participants.push(args[++i]);
+        }
+        break;
       case "--help": case "-h":
         printHelp();
         process.exit(0);
@@ -79,67 +109,145 @@ function printHelp(): void {
 
 Usage: npx tsx src/index.ts [options]
 
-Agent Types:
-  --mode mock      Both agents use heuristic AI (default)
-  --mode llm       Both agents use OpenAI-compatible LLM
-  --mode mixed     Agent 1 = LLM, Agent 2 = heuristic
+═══ Scenario Mode (any battle configuration) ═══
 
-Options:
-  --a1-class <class>    Agent 1 class: warrior, mage, rogue, paladin (default: warrior)
-  --a1-name <name>      Agent 1 name (default: Alpha)
-  --a1-model <model>    Agent 1 LLM model (default: gpt-4o-mini)
-  --a2-class <class>    Agent 2 class (default: mage)
-  --a2-name <name>      Agent 2 name (default: Beta)
-  --a2-model <model>    Agent 2 LLM model (default: gpt-4o-mini)
-  --mode <mode>         Battle mode (default: mock)
-  --boss-exam           Boss Exam mode: fight all 5 bosses, graded at end
-  --max-turns <n>       Maximum turns before draw (default: 30)
-  --delay <ms>          Delay between turns in ms (default: 1500)
-  --output, -o <file>   Save battle log to JSON file
-  --help, -h            Show this help
+  -p, --participants <spec> [<spec> ...]
+      Each spec: "Name,Role,Team,AgentType[,Model]"
+      Role: warrior, mage, rogue, paladin, or boss ID (goblin_king, dark_wizard, etc.)
+      Team: any string — same team = allies (e.g. "red", "blue", "boss")
+      AgentType: heuristic, llm, human, boss
+      Model: LLM model name (only for agentType "llm")
+
+  --arena <preset>        Arena size: small, medium, large, boss_room, grand
+                          (default: auto-picked by participant count)
+  --win <condition>       Win condition: last_team_standing (default), last_unit_standing (FFA)
+
+═══ Legacy 1v1 Flags ═══
+
+  --mode mock             Both agents use heuristic AI (default)
+  --mode llm              Both agents use OpenAI-compatible LLM
+  --mode mixed            Agent 1 = LLM, Agent 2 = heuristic
+
+  --a1-class <class>      Agent 1 class: warrior, mage, rogue, paladin (default: warrior)
+  --a1-name <name>        Agent 1 name (default: Alpha)
+  --a1-model <model>      Agent 1 LLM model (default: gpt-4o-mini)
+  --a2-class <class>      Agent 2 class (default: mage)
+  --a2-name <name>        Agent 2 name (default: Beta)
+  --a2-model <model>      Agent 2 LLM model (default: gpt-4o-mini)
+
+═══ General ═══
+
+  --boss-exam             Boss Exam: fight all 5 bosses, graded at end
+  --max-turns <n>         Maximum turns before draw (default: 30)
+  --delay <ms>            Delay between turns in ms (default: 1500)
+  --output, -o <file>     Save battle log to JSON file
+  --help, -h              Show this help
 
 Environment:
   LLM_API_KEY    API key (not needed for local providers like Ollama)
   LLM_BASE_URL   Base URL (default: https://api.openai.com/v1)
 
 Examples:
-  # Quick mock battle
+  # Classic 1v1 (legacy flags)
   npx tsx src/index.ts --mode mock --delay 500
 
-  # LLM vs LLM
-  npx tsx src/index.ts --mode llm --a1-model gpt-4o-mini --a2-model gpt-4o
+  # 1v1 with participants
+  npx tsx src/index.ts -p "Alpha,warrior,red,llm" "Beta,mage,blue,llm"
 
-  # LLM vs LLM via Ollama (local)
-  LLM_BASE_URL=http://localhost:11434/v1 npx tsx src/index.ts --mode llm --a1-model llama3 --a2-model mistral
+  # 2v2 team battle
+  npx tsx src/index.ts -p \\
+    "Tank,warrior,red,llm" "Nuke,mage,red,llm" \\
+    "Blade,rogue,blue,llm" "Heals,paladin,blue,llm"
 
-  # Mixed: LLM agent vs heuristic AI
-  npx tsx src/index.ts --mode mixed --a1-model gpt-4o-mini
+  # Raid: 4 players vs Ancient Dragon
+  npx tsx src/index.ts -p \\
+    "Tank,paladin,raid,llm" "DPS,rogue,raid,llm" \\
+    "Mage,mage,raid,llm" "Bruiser,warrior,raid,llm" \\
+    "Dragon,ancient_dragon,boss,boss" \\
+    --arena boss_room
 
-  # Save battle log
-  npx tsx src/index.ts --mode mock -o battle-log.json
+  # FFA: 4 players, last one standing
+  npx tsx src/index.ts -p \\
+    "A,warrior,a,llm" "B,mage,b,llm" \\
+    "C,rogue,c,llm" "D,paladin,d,llm" \\
+    --win last_unit_standing
+
+  # Boss exam
+  npx tsx src/index.ts --boss-exam --a1-class mage --mode llm --a1-model qwen3
 `));
+}
+
+// ── Parse Participant Spec ──────────────────────────────
+
+const BOSS_IDS = new Set(["goblin_king", "dark_wizard", "ancient_dragon", "lich_lord", "demon_lord"]);
+const CLASS_IDS = new Set(["warrior", "mage", "rogue", "paladin"]);
+
+function parseParticipantSpec(spec: string): ParticipantConfig {
+  const parts = spec.split(",").map(s => s.trim());
+  if (parts.length < 4) {
+    console.error(chalk.red(`Invalid participant spec (need 4-5 comma-separated values): "${spec}"`));
+    console.error(chalk.dim(`  Format: "Name,Role,Team,AgentType[,Model]"`));
+    process.exit(1);
+  }
+
+  const [name, role, team, agentStr, model] = parts;
+
+  // Validate role
+  if (!CLASS_IDS.has(role) && !BOSS_IDS.has(role)) {
+    console.error(chalk.red(`Invalid role "${role}". Must be warrior, mage, rogue, paladin, or a boss ID.`));
+    process.exit(1);
+  }
+
+  // Validate agent type
+  const agentType = agentStr as AgentType;
+  if (!["heuristic", "llm", "human", "boss"].includes(agentType)) {
+    console.error(chalk.red(`Invalid agent type "${agentType}". Must be heuristic, llm, human, or boss.`));
+    process.exit(1);
+  }
+
+  // If agent is "llm" and no model provided, use default
+  const finalModel = agentType === "llm"
+    ? (model || process.env.LLM_MODEL || "gpt-4o-mini")
+    : undefined;
+
+  return {
+    name,
+    team,
+    role: role as CharacterRole,
+    agent: agentType,
+    model: finalModel,
+  };
 }
 
 // ── Agent Factory ───────────────────────────────────────
 
-function createAgent(
-  mode: "llm" | "mock",
-  charId: string,
-  charName: string,
+function createAgentFor(
+  agentType: AgentType,
+  id: string,
+  name: string,
   charClass: string,
-  model: string
+  model?: string,
+  bossId?: string,
 ): IAgent {
-  if (mode === "llm") {
-    return new LLMAgent({
-      id: charId,
-      name: charName,
-      characterClass: charClass,
-      model,
-      apiKey: process.env.LLM_API_KEY || "no-key",
-      baseURL: process.env.LLM_BASE_URL || "http://localhost:8008/v1",
-    });
+  switch (agentType) {
+    case "llm":
+      return new LLMAgent({
+        id,
+        name,
+        characterClass: charClass,
+        model: model || "gpt-4o-mini",
+        apiKey: process.env.LLM_API_KEY || "no-key",
+        baseURL: process.env.LLM_BASE_URL || "http://localhost:8008/v1",
+      });
+    case "boss":
+      return new BossAgent(id, name, bossId as any);
+    case "human":
+      // Human agent not yet implemented — fall back to heuristic
+      return new HeuristicAgent(id, name);
+    case "heuristic":
+    default:
+      return new HeuristicAgent(id, name);
   }
-  return new HeuristicAgent(charId, charName);
 }
 
 // ── Main ────────────────────────────────────────────────
@@ -149,9 +257,92 @@ async function main() {
 
   if (opts.bossExam) {
     await runBossExam(opts);
+  } else if (opts.participants.length > 0) {
+    await runScenario(opts);
   } else {
     await run1v1(opts);
   }
+}
+
+// ── Scenario Battle (generic N-participant) ─────────────
+
+async function runScenario(opts: CliOptions) {
+  const configs = opts.participants.map(parseParticipantSpec);
+
+  if (configs.length < 2) {
+    console.error(chalk.red("Need at least 2 participants for a battle."));
+    process.exit(1);
+  }
+
+  // Check for duplicate names
+  const names = configs.map(c => c.name);
+  const dupes = names.filter((n, i) => names.indexOf(n) !== i);
+  if (dupes.length > 0) {
+    console.error(chalk.red(`Duplicate participant names: ${dupes.join(", ")}. Each name must be unique.`));
+    process.exit(1);
+  }
+
+  // Build characters and agents
+  const characters = configs.map((cfg, i) => {
+    const id = `unit${i + 1}`;
+    if (BOSS_IDS.has(cfg.role)) {
+      return createBoss(cfg.role as any);
+    }
+    return createCharacter(id, cfg.name, cfg.role as any, { x: 0, y: 0 }, cfg.team);
+  });
+
+  // Fix boss character names/ids to match participant config
+  const agents: IAgent[] = configs.map((cfg, i) => {
+    const id = characters[i].id;
+    // Override boss name if specified
+    if (BOSS_IDS.has(cfg.role)) {
+      characters[i].name = cfg.name;
+      characters[i].team = cfg.team;
+    }
+    return createAgentFor(cfg.agent, id, cfg.name, characters[i].class, cfg.model, cfg.role);
+  });
+
+  // Pick arena
+  const arena: ArenaConfig = opts.arena && ARENA_PRESETS[opts.arena]
+    ? ARENA_PRESETS[opts.arena]
+    : autoArenaPreset(configs.length);
+
+  // Print battle header
+  console.log(chalk.bold.cyan("\n⚔️  RPG ARENA BATTLE\n"));
+  const teams = new Set(configs.map(c => c.team));
+  if (teams.size === configs.length) {
+    console.log(chalk.bold("  Mode: Free-For-All (last unit standing)\n"));
+  } else {
+    for (const team of teams) {
+      const members = configs.filter(c => c.team === team);
+      console.log(chalk.bold(`  Team "${team}": `) + members.map(m =>
+        `${m.name} (${m.role}) [${m.agent === 'llm' ? '🧠' : '🤖'}]`
+      ).join(", "));
+    }
+    console.log();
+  }
+
+  // Create renderer and run
+  const agentMap = new Map<string, IAgent>(agents.map(a => [a.id, a]));
+  const cliRenderer = createCliRenderer(agentMap);
+
+  const runner = new BattleRunner(characters, agents, {
+    maxTurns: opts.maxTurns,
+    turnDelayMs: opts.delay,
+    eventHandler: cliRenderer,
+    arena,
+    winCondition: opts.winCondition as any,
+  });
+
+  const log = await runner.run();
+  const replayPath = saveReplay(log, runner.getCharacters(), runner.getAgents());
+
+  if (opts.outputFile) {
+    const outPath = path.resolve(opts.outputFile);
+    fs.writeFileSync(outPath, JSON.stringify(log, null, 2));
+  }
+
+  printBattleSummary(log.winner, log.totalTurns, log.startTime, log.endTime, replayPath);
 }
 
 // ── Boss Exam ──────────────────────────────────────────
@@ -182,7 +373,7 @@ async function runBossExam(opts: CliOptions) {
     const playerChar = createCharacter("agent1", opts.agent1Name, opts.agent1Class as any);
     const bossChar = createBoss(bossId);
 
-    const agent1 = createAgent(agentMode, playerChar.id, playerChar.name, playerChar.class, opts.agent1Model);
+    const agent1 = createAgentFor(agentMode as any, playerChar.id, playerChar.name, playerChar.class, opts.agent1Model);
     const bossAgent = new BossAgent("boss", bossProfile.name, bossId);
 
     const agentMap = new Map<string, IAgent>([
@@ -195,6 +386,7 @@ async function runBossExam(opts: CliOptions) {
       maxTurns: opts.maxTurns,
       turnDelayMs: opts.delay,
       eventHandler: cliRenderer,
+      arena: ARENA_PRESETS.boss_room,
     });
 
     const log = await runner.run();
@@ -216,7 +408,6 @@ async function runBossExam(opts: CliOptions) {
   const total = results.length;
   const grade = gradeBossExam(wins, total);
 
-  const gradeColors: Record<string, string> = { S: "gold", A: "green", B: "blue", C: "magenta", D: "yellow", F: "red" };
   console.log(chalk.bold.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
   console.log(chalk.bold.cyan("  📋 BOSS EXAM RESULTS"));
   console.log(chalk.bold.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"));
@@ -241,7 +432,7 @@ function gradeBossExam(wins: number, total: number): string {
   return "F";
 }
 
-// ── 1v1 Battle ─────────────────────────────────────────
+// ── 1v1 Battle (legacy) ────────────────────────────────
 
 async function run1v1(opts: CliOptions) {
   const validClasses = ["warrior", "mage", "rogue", "paladin"];
@@ -250,25 +441,21 @@ async function run1v1(opts: CliOptions) {
     process.exit(1);
   }
 
-  // Create characters
-  const char1 = createCharacter("agent1", opts.agent1Name, opts.agent1Class as any);
-  const char2 = createCharacter("agent2", opts.agent2Name, opts.agent2Class as any);
+  const char1 = createCharacter("agent1", opts.agent1Name, opts.agent1Class as any, undefined, "a");
+  const char2 = createCharacter("agent2", opts.agent2Name, opts.agent2Class as any, undefined, "b");
 
-  // Create agents based on mode
   const agent1Mode = opts.mode === "mock" ? "mock" : "llm";
   const agent2Mode = opts.mode === "llm" ? "llm" : "mock";
 
-  const agent1 = createAgent(agent1Mode, char1.id, char1.name, char1.class, opts.agent1Model);
-  const agent2 = createAgent(agent2Mode, char2.id, char2.name, char2.class, opts.agent2Model);
+  const agent1 = createAgentFor(agent1Mode as any, char1.id, char1.name, char1.class, opts.agent1Model);
+  const agent2 = createAgentFor(agent2Mode as any, char2.id, char2.name, char2.class, opts.agent2Model);
 
-  // Create renderer
   const agentMap = new Map<string, IAgent>([
     [char1.id, agent1],
     [char2.id, agent2],
   ]);
   const cliRenderer = createCliRenderer(agentMap);
 
-  // Run battle through the engine
   const runner = new BattleRunner([char1, char2], [agent1, agent2], {
     maxTurns: opts.maxTurns,
     turnDelayMs: opts.delay,
@@ -276,17 +463,13 @@ async function run1v1(opts: CliOptions) {
   });
 
   const log = await runner.run();
-
-  // Save markdown replay (always)
   const replayPath = saveReplay(log, runner.getCharacters(), runner.getAgents());
 
-  // Save JSON log if requested
   if (opts.outputFile) {
     const outPath = path.resolve(opts.outputFile);
     fs.writeFileSync(outPath, JSON.stringify(log, null, 2));
   }
 
-  // Summary
   printBattleSummary(log.winner, log.totalTurns, log.startTime, log.endTime, replayPath);
 }
 
