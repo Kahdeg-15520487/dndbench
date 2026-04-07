@@ -16,7 +16,7 @@ import { createBoss, getBossProfile, getAllBossProfiles, BOSS_RUSH_ORDER } from 
 import { HeuristicAgent, LLMAgent, BossAgent } from "./agent/index.js";
 import type { IAgent } from "./agent/index.js";
 import { BattleRunner } from "./arena/battle-runner.js";
-import { createCliRenderer, printBattleSummary } from "./arena/cli-renderer.js";
+import { createCliRenderer, createCliThinkingHandler, printBattleSummary } from "./arena/cli-renderer.js";
 import { saveReplay } from "./arena/replay.js";
 import {
   type ParticipantConfig,
@@ -228,6 +228,7 @@ function createAgentFor(
   charClass: string,
   model?: string,
   bossId?: string,
+  onThinking?: (step: any) => void,
 ): IAgent {
   switch (agentType) {
     case "llm":
@@ -238,6 +239,7 @@ function createAgentFor(
         model: model || "gpt-4o-mini",
         apiKey: process.env.LLM_API_KEY || "no-key",
         baseURL: process.env.LLM_BASE_URL || "http://localhost:8008/v1",
+        onThinking,
       });
     case "boss":
       return new BossAgent(id, name, bossId as any);
@@ -292,6 +294,7 @@ async function runScenario(opts: CliOptions) {
   });
 
   // Fix boss character names/ids to match participant config
+  const thinkingHandler = createCliThinkingHandler();
   const agents: IAgent[] = configs.map((cfg, i) => {
     const id = characters[i].id;
     // Override boss name if specified
@@ -299,7 +302,7 @@ async function runScenario(opts: CliOptions) {
       characters[i].name = cfg.name;
       characters[i].team = cfg.team;
     }
-    return createAgentFor(cfg.agent, id, cfg.name, characters[i].class, cfg.model, cfg.role);
+    return createAgentFor(cfg.agent, id, cfg.name, characters[i].class, cfg.model, undefined, thinkingHandler);
   });
 
   // Pick arena
@@ -355,6 +358,7 @@ async function runBossExam(opts: CliOptions) {
   }
 
   const agentMode = opts.mode === "mock" ? "mock" : "llm";
+  const thinkingHandler = createCliThinkingHandler();
   const results: { bossName: string; won: boolean; turns: number }[] = [];
 
   console.log(chalk.bold.cyan("\n👹 BOSS EXAM — Fight 5 bosses of increasing difficulty!\n"));
@@ -373,7 +377,7 @@ async function runBossExam(opts: CliOptions) {
     const playerChar = createCharacter("agent1", opts.agent1Name, opts.agent1Class as any);
     const bossChar = createBoss(bossId);
 
-    const agent1 = createAgentFor(agentMode as any, playerChar.id, playerChar.name, playerChar.class, opts.agent1Model);
+    const agent1 = createAgentFor(agentMode as any, playerChar.id, playerChar.name, playerChar.class, opts.agent1Model, undefined, thinkingHandler);
     const bossAgent = new BossAgent("boss", bossProfile.name, bossId);
 
     const agentMap = new Map<string, IAgent>([
@@ -446,9 +450,10 @@ async function run1v1(opts: CliOptions) {
 
   const agent1Mode = opts.mode === "mock" ? "mock" : "llm";
   const agent2Mode = opts.mode === "llm" ? "llm" : "mock";
+  const thinkingHandler = createCliThinkingHandler();
 
-  const agent1 = createAgentFor(agent1Mode as any, char1.id, char1.name, char1.class, opts.agent1Model);
-  const agent2 = createAgentFor(agent2Mode as any, char2.id, char2.name, char2.class, opts.agent2Model);
+  const agent1 = createAgentFor(agent1Mode as any, char1.id, char1.name, char1.class, opts.agent1Model, undefined, thinkingHandler);
+  const agent2 = createAgentFor(agent2Mode as any, char2.id, char2.name, char2.class, opts.agent2Model, undefined, thinkingHandler);
 
   const agentMap = new Map<string, IAgent>([
     [char1.id, agent1],

@@ -10,6 +10,39 @@ import chalk from "chalk";
 // ── Character name cache ────────────────────────────────
 const charNames = new Map<string, string>();
 
+/** Track the current acting character (set by turn_start) */
+let currentActorId = "";
+
+/**
+ * Create a thinking callback for LLM agents (CLI mode).
+ * Only prints thinking for the currently acting character.
+ */
+export function createCliThinkingHandler(): (step: import("../engine/types.js").ThinkingStep) => void {
+  return (step) => {
+    // This callback is agent-specific, so it's already scoped to the right actor.
+    // Just print indented thinking lines.
+    switch (step.type) {
+      case "thinking":
+        console.log(chalk.gray(`    💭 ${step.text}`));
+        break;
+      case "tool_call": {
+        const paramStr = step.toolParams
+          ? Object.entries(step.toolParams)
+              .filter(([_, v]) => v != null)
+              .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+              .join(", ")
+          : "";
+        console.log(chalk.gray(`    🔧 ${step.toolName}${paramStr ? `(${paramStr})` : ""}`));
+        break;
+      }
+      case "tool_result":
+        // Only show non-action tool results (action results are shown via narrative)
+        console.log(chalk.gray(`      ↳ ${step.text}`));
+        break;
+    }
+  };
+}
+
 /**
  * Create an event handler that renders to the terminal with chalk.
  *

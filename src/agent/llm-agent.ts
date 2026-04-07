@@ -140,7 +140,8 @@ export class LLMAgent implements IAgent {
     const baseUrl = this.config.baseURL || "https://api.openai.com/v1";
     const apiKey = this.config.apiKey || "no-key";
 
-    console.error(`[${this.name}] onBattleStart — ${modelId} @ ${baseUrl}`);
+    // Debug: uncomment to trace LLM config
+    // console.error(`[${this.name}] onBattleStart — ${modelId} @ ${baseUrl}`);
 
     const systemPrompt = this.buildSystemPrompt(me);
     const authStorage = AuthStorage.create();
@@ -255,7 +256,6 @@ export class LLMAgent implements IAgent {
         });
       } else if (t === "turn_end") {
         if (thinkingBuf || toolCalls.length) {
-          console.error(`[${this.name}] think: ${thinkingBuf || "(none)"} | tools: ${toolCalls.join(", ")}`);
           if (thinkingBuf.trim()) {
             this.emitThinking({
               type: "thinking",
@@ -266,7 +266,7 @@ export class LLMAgent implements IAgent {
         thinkingBuf = "";
         toolCalls = [];
       } else if (t === "agent_end") {
-        console.error(`[${this.name}] done`);
+        // thinking complete
       }
     });
   }
