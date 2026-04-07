@@ -36,7 +36,15 @@ export function saveReplay(
     console.error("Battlefield image generation skipped:", err.message);
   }
 
-  const md = renderMarkdown(log, characters, agents, imageMap);
+  // Generate animated GIF replay
+  let gifPath: string | undefined;
+  try {
+    gifPath = generateBattlefieldGif(log, characters, imagesDir);
+  } catch (err: any) {
+    console.error("GIF generation skipped:", err.message);
+  }
+
+  const md = renderMarkdown(log, characters, agents, imageMap, gifPath);
   fs.writeFileSync(filePath, md, "utf-8");
   return filePath;
 }
@@ -47,7 +55,8 @@ function renderMarkdown(
   log: BattleLog,
   characters: Character[],
   agents: IAgent[],
-  imageMap: Map<string, string>
+  imageMap: Map<string, string>,
+  gifPath?: string
 ): string {
   const lines: string[] = [];
   const agentMap = new Map(agents.map((a) => [a.id, a]));
@@ -89,6 +98,13 @@ function renderMarkdown(
   lines.push(`- **Arena**: ${log.arena.label} (${log.arena.width}×${log.arena.height})`);
   lines.push(`- **Started**: ${log.startTime}`);
   lines.push(`- **Ended**: ${log.endTime ?? "N/A"}`);
+
+  // Animated GIF link
+  if (gifPath) {
+    const gifRelPath = `./${path.basename(path.dirname(gifPath))}/${path.basename(gifPath)}`;
+    lines.push("");
+    lines.push(`🎬 **Animated Replay**: [${path.basename(gifPath)}](${gifRelPath})`);
+  }
   lines.push("");
 
   // ── Turn-by-turn ──
@@ -281,6 +297,7 @@ function truncate(val: any, maxLen: number): string {
 
 import {
   renderBattlefield,
+  renderBattlefieldCanvas,
   type BattlefieldCharacter,
   type BattlefieldFrame,
 } from "./battlefield-renderer.js";
@@ -336,4 +353,129 @@ function generateBattlefieldImages(
   return imageMap;
 }
 
+// ── Animated GIF Generation ────────────────────────────
+
+import GIFEncoder from "gif-encoder-2";
+import { createCanvas, loadImage } from "canvas";
+
+function generateBattlefieldGif(
+  log: BattleLog,
+  characters: Character[],
+  imagesDir: string
+): string | undefined {
+  // Collect all frames
+  const frames: { turnNumber: number; actorId: string; snapshot: any; move?: any }[] = [];
+
+  for (const turn of log.turns) {
+    for (const result of turn.results) {
+      if (turn.stateSnapshot) {
+        frames.push({
+          turnNumber: turn.turnNumber,
+          actorId: result.actorId,
+          snapshot: turn.stateSnapshot,
+          move: result.move,
+        });
+      }
+    }
+  }
+
+  if (frames.length === 0) return undefined;
+
+  // Render each frame to a canvas, then feed to GIF encoder
+  const WIDTH = 560;
+  const HEIGHT = 280;
+
+  const gif = new GIFEncoder(WIDTH, HEIGHT, "neuquant", true);
+  gif.start();
+  gif.setRepeat(0); // loop forever
+  gif.setDelay(1200); // 1.2s per frame
+  gif.setQuality(10); // 1=best, 20=fast
+
+  for (const frame of frames) {
+    const bfChars: BattlefieldCharacter[] = frame.snapshot.characters.map((c: any) => ({
+      id: c.id,
+      name: c.name,
+      team: c.team,
+      hp: c.hp,
+      maxHp: c.maxHp,
+      mp: c.mp,
+      maxMp: c.maxMp,
+      position: c.position,
+      statusEffects: c.statusEffects?.map((e: any) => typeof e === "string" ? e : e.type) ?? [],
+      isDefending: c.isDefending,
+    }));
+
+    const bfFrame: BattlefieldFrame = {
+      arena: log.arena,
+      characters: bfChars,
+      moveTrail: frame.move
+        ? { actorId: frame.actorId, from: frame.move.from, to: frame.move.to }
+        : undefined,
+      turnNumber: frame.turnNumber,
+      actorId: frame.actorId,
+    };
+
+    // Render the frame to a PNG buffer, then load it onto a canvas for GIF encoding
+    const buf = renderBattlefield(bfFrame, WIDTH, HEIGHT);
+    const img = loadImage(buf);
+    // gif-encoder-2 expects a Canvas context; we'll use a workaround
+    // since loadImage is sync in node-canvas — actually it's async
+  }
+
+  // Since loadImage is async, let's use a synchronous approach:
+  // render directly to a canvas instead of PNG → load → canvas
+  return generateBattlefieldGifSync(log, frames, imagesDir, WIDTH, HEIGHT);
+}
+
+function generateBattlefieldGifSync(
+  log: BattleLog,
+  frames: { turnNumber: number; actorId: string; snapshot: any; move?: any }[],
+  imagesDir: string,
+  width: number,
+  height: number
+): string {
+  const gif = new GIFEncoder(width, height, "neuquant", true);
+  gif.start();
+  gif.setRepeat(0);
+  gif.setDelay(1200);
+  gif.setQuality(10);
+
+  // Render each frame directly to a canvas using renderBattlefieldToCanvas
+  for (const frame of frames) {
+    const bfChars: BattlefieldCharacter[] = frame.snapshot.characters.map((c: any) => ({
+      id: c.id,
+      name: c.name,
+      team: c.team,
+      hp: c.hp,
+      maxHp: c.maxHp,
+      mp: c.mp,
+      maxMp: c.maxMp,
+      position: c.position,
+      statusEffects: c.statusEffects?.map((e: any) => typeof e === "string" ? e : e.type) ?? [],
+      isDefending: c.isDefending,
+    }));
+
+    const bfFrame: BattlefieldFrame = {
+      arena: log.arena,
+      characters: bfChars,
+      moveTrail: frame.move
+        ? { actorId: frame.actorId, from: frame.move.from, to: frame.move.to }
+        : undefined,
+      turnNumber: frame.turnNumber,
+      actorId: frame.actorId,
+    };
+
+    // Get the canvas directly instead of going through PNG
+    const canvas = renderBattlefieldCanvas(bfFrame, width, height);
+    gif.addFrame(canvas.getContext("2d") as any);
+  }
+
+  gif.finish();
+  const gifData = gif.out.getData();
+  const gifName = "battlefield_anim.gif";
+  const gifFullPath = path.join(imagesDir, gifName);
+  fs.writeFileSync(gifFullPath, Buffer.from(gifData));
+
+  return gifFullPath;
+}
 
