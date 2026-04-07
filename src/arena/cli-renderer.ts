@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────
 
 import type { BattleEvent, BattleEventHandler } from "./battle-runner.js";
-import type { Character } from "../engine/types.js";
+import type { Character, CombatAction } from "../engine/types.js";
 import type { IAgent } from "../agent/interface.js";
 import chalk from "chalk";
 
@@ -12,10 +12,17 @@ const charNames = new Map<string, string>();
 
 /**
  * Create an event handler that renders to the terminal with chalk.
+ *
+ * Buffers action_chosen + move events, then prints a combined
+ * one-line summary when action_result arrives.
  */
 export function createCliRenderer(
   agentMap: Map<string, IAgent>
 ): BattleEventHandler {
+  // Buffer for current turn's action + move
+  let pendingAction: CombatAction | null = null;
+  let pendingMove: { dx: number; dy: number } | null = null;
+
   return (event: BattleEvent) => {
     switch (event.type) {
       case "battle_start":
@@ -24,6 +31,10 @@ export function createCliRenderer(
         break;
 
       case "turn_start": {
+        // Reset buffer for new turn
+        pendingAction = null;
+        pendingMove = null;
+
         const name = charNames.get(event.actorId) ?? event.actorId;
         const agent = agentMap.get(event.actorId);
         const emoji: Record<string, string> = { heuristic: "🤖", llm: "🧠", human: "👤" };
@@ -34,20 +45,27 @@ export function createCliRenderer(
       }
 
       case "move": {
-        const name = charNames.get(event.actorId) ?? event.actorId;
-        console.log(
-          chalk.magenta(`  🏃 ${name} moves (${event.from.x.toFixed(1)},${event.from.y.toFixed(1)}) → (${event.to.x.toFixed(1)},${event.to.y.toFixed(1)}) [${event.distance.toFixed(1)} units]`)
-        );
+        // Buffer the move delta
+        pendingMove = {
+          dx: +(event.to.x - event.from.x).toFixed(1),
+          dy: +(event.to.y - event.from.y).toFixed(1),
+        };
         break;
       }
 
       case "action_chosen":
-        printActionChosen(event.action);
+        // Buffer the action (don't print yet)
+        pendingAction = event.action;
         break;
 
-      case "action_result":
+      case "action_result": {
+        // Print combined summary line, then the narrative
+        printTurnSummary(pendingAction, pendingMove);
         printActionResult(event.result);
+        pendingAction = null;
+        pendingMove = null;
         break;
+      }
 
       case "status_tick":
         event.narratives.forEach((n) => console.log(chalk.gray(`  ${n}`)));
@@ -66,6 +84,48 @@ export function createCliRenderer(
         break;
     }
   };
+}
+
+// ── Turn Summary (combines action + move into one line) ──
+
+function describeAction(action: CombatAction): string {
+  const targetName = action.targetId ? (charNames.get(action.targetId) ?? action.targetId) : null;
+
+  switch (action.type) {
+    case "attack":
+      return targetName ? `attacks ${targetName}` : "attacks";
+    case "cast_spell":
+      return targetName
+        ? `casts ${action.spellId} on ${targetName}`
+        : `casts ${action.spellId ?? "a spell"}`;
+    case "use_item":
+      return targetName
+        ? `uses ${action.itemId} on ${targetName}`
+        : `uses ${action.itemId ?? "an item"}`;
+    case "defend":
+      return "defends";
+    case "wait":
+      return "waits";
+    case "flee":
+      return "flees";
+    default:
+      return action.type;
+  }
+}
+
+function printTurnSummary(action: CombatAction | null, move: { dx: number; dy: number } | null): void {
+  if (!action) return;
+
+  const actorName = charNames.get(action.actorId) ?? action.actorId;
+  const actionDesc = describeAction(action);
+
+  if (move) {
+    console.log(
+      chalk.cyan(`  → ${actorName} moves (${move.dx}, ${move.dy}) → ${actionDesc}`)
+    );
+  } else {
+    console.log(chalk.cyan(`  → ${actorName} ${actionDesc}`));
+  }
 }
 
 // ── Display helpers ─────────────────────────────────────
@@ -93,10 +153,6 @@ function printBattleStart(characters: Character[], agentMap: Map<string, IAgent>
   }
 
   console.log("─".repeat(60) + "\n");
-}
-
-function printActionChosen(action: import("../engine/types.js").CombatAction): void {
-  console.log(chalk.cyan(`  → Chose: ${formatAction(action)}`));
 }
 
 function printActionResult(result: import("../engine/types.js").CombatResult): void {
@@ -140,19 +196,6 @@ function printHealthBars(characters: Character[]): void {
     );
   }
   console.log(chalk.bold("  └─────────────┴──────────────────┴──────────────────┴─────────────┘\n"));
-}
-
-// ── Helpers ─────────────────────────────────────────────
-
-function formatAction(action: import("../engine/types.js").CombatAction): string {
-  const parts: string[] = [action.type];
-  if (action.spellId) parts.push(`spell="${action.spellId}"`);
-  if (action.itemId) parts.push(`item="${action.itemId}"`);
-  if (action.targetId) {
-    const targetName = charNames.get(action.targetId) ?? action.targetId;
-    parts.push(`target="${targetName}"`);
-  }
-  return parts.join(" ");
 }
 
 // ── Summary (called after run()) ────────────────────────
