@@ -339,8 +339,8 @@ export class LLMAgent implements IAgent {
       {
         name: "inspect_self",
         label: "Inspect Self",
-        description: "Get your detailed stats: HP, MP, status effects, defending state.",
-        promptSnippet: "Check your own HP, MP, and status effects",
+        description: "Get your detailed stats: HP, AC, status effects, defending state.",
+        promptSnippet: "Check your own HP, AC, and status effects",
         parameters: Type.Object({}),
         execute: async () => {
           const me = this.currentSnapshot!.characters.find((c) => c.id === this.id)!;
@@ -364,7 +364,7 @@ export class LLMAgent implements IAgent {
       {
         name: "inspect",
         label: "Inspect Combatant",
-        description: "Get a combatant's visible stats: HP, MP, status effects, position.",
+        description: "Get a combatant's visible stats: HP, AC, status effects, position.",
         promptSnippet: "Check a combatant's HP and status",
         parameters: Type.Object({
           name: Type.String({ description: "Character name to inspect (e.g. 'Alpha', 'Beta')" }),
@@ -439,7 +439,7 @@ export class LLMAgent implements IAgent {
       {
         name: "review_spells",
         label: "Review Spells",
-        description: "List your available spells with full details: power, cost, cooldown, status effects.",
+        description: "List your available spells with full details: level, damage dice, range, status effects.",
         promptSnippet: "Check which spells are ready and their properties",
         parameters: Type.Object({}),
         execute: async () => {
@@ -535,7 +535,7 @@ export class LLMAgent implements IAgent {
       {
         name: "cast_spell",
         label: "Cast Spell",
-        description: "Cast a spell. Requires spell_id. Costs MP. Spell has a range — out of range = miss. Optionally move first.",
+        description: "Cast a spell. Requires spell_id and target. Uses a spell slot (cantrips are free). Spell has a range — out of range = miss. Optionally move first.",
         promptSnippet: "Cast a spell (fire, ice, heal, etc.)",
         parameters: Type.Object({
           spell_id: Type.String({ description: "Spell ID to cast (e.g. fire, heal, shield)" }),
@@ -586,7 +586,7 @@ export class LLMAgent implements IAgent {
       {
         name: "wait",
         label: "Wait",
-        description: "Do nothing this turn. Recover 8 MP. Can move while waiting.",
+        description: "Do nothing this turn. You can still move while waiting.",
         promptSnippet: "Wait (skip turn)",
         parameters: Type.Object({
           move_dx: Type.Optional(Type.Number({ description: "Move this much in X" })),
@@ -664,7 +664,7 @@ The battlefield is a 2D space. Position matters!
 
 ## TARGETING
 - ALL action tools use character NAMES for targeting (e.g. 'Alpha', 'Beta').
-- Self-cast spells: use your own name as the target — cast_spell(spell_id="heal", target="${me.name}")
+- Self-cast spells: use your own name as the target — cast_spell(spell_id="cure_wounds", target="${me.name}")
 - Attack: always needs a target name — attack(target="Beta")
 - Bombs: need a target name — use_item(item_id="bomb", target="Beta")
 - Potions: omit target (auto-targets self) — use_item(item_id="health_potion")
@@ -673,16 +673,16 @@ The battlefield is a 2D space. Position matters!
 You have two kinds of tools:
 
 1. OBSERVATION TOOLS (free — call as many as you want before acting):
-   - inspect_self: Your detailed stats (HP, MP, status effects, position)
+   - inspect_self: Your detailed stats (HP, AC, status effects, position)
    - inspect: Get any combatant's visible stats — inspect(name="Beta")
    - estimate_distance: Distance to a target + which spells/items are in range — estimate_distance(target="Beta")
-   - review_spells: Your spells with cooldown status, range, and MP cost
+   - review_spells: Your spells with level, damage dice, range, and readiness
    - review_inventory: Your usable items with quantities and range
 
 2. ACTION TOOLS (commits your turn — call EXACTLY ONE):
    - attack, defend, cast_spell, use_item, wait, flee
    - ALL action tools accept optional move_dx and move_dy to reposition before acting.
-   - Example: cast_spell(spell_id="fire", target="Beta", move_dx=2, move_dy=0) — moves 2 right, THEN casts fire at Beta from the new position.
+   - Example: cast_spell(spell_id="fire_bolt", target="Beta", move_dx=2, move_dy=0) — moves 2 right, THEN casts Fire Bolt at Beta from the new position.
    - Example: attack(target="Alpha", move_dx=-3, move_dy=0) — moves 3 left, THEN swings at Alpha if in melee range.
    - Example: cast_spell(spell_id="heal", target="${me.name}") — heals yourself.
 
@@ -691,7 +691,7 @@ You have two kinds of tools:
 - You have LIMITED TIME. Observe quickly, then act decisively.
 - Do NOT write explanations. Just call tools.
 - If HP is low, heal or defend.
-- If MP is low, use items or wait.
+- If spell slots are depleted, use cantrips (free) or items.
 - Use status effects strategically.
 - CHECK DISTANCE before attacking! Your move_dx/move_dy shifts you first, then range is checked from your new position.
 - NEVER waste a turn: if out of range, include movement to close the gap. If too far even after moving, use a long-range spell or item instead of melee.

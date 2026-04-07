@@ -108,7 +108,7 @@ function teamColor(team: string): string {
 
 // ── Actions ───────────────────────────────────────────
 function doAction(type: string, extra?: { spellId?: string; itemId?: string }) {
-  const target = ["heal", "shield"].includes(extra?.spellId || "") ? "self" : undefined;
+  const target = ["cure_wounds", "shield", "shield_of_faith"].includes(extra?.spellId || "") ? "self" : undefined;
   emit("action", { type, ...extra, target });
   actionMode.value = "main";
 }
