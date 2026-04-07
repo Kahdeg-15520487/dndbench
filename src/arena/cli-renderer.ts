@@ -83,12 +83,10 @@ function printBattleStart(characters: Character[], agentMap: Map<string, IAgent>
       human: "👤 Human",
     };
     console.log(
-      `  ${chalk.bold(char.name)} (${char.class}) [${typeLabel[agent?.type || ""] || "unknown"}]` +
-        `  HP: ${chalk.green(char.stats.hp)}/${char.stats.maxHp}` +
-        `  MP: ${chalk.blue(char.stats.mp)}/${char.stats.maxMp}` +
-        `  STR:${char.stats.strength} DEF:${char.stats.defense}` +
-        ` MAG:${char.stats.magic} SPD:${char.stats.speed} LCK:${char.stats.luck}`
+      `  ${chalk.bold(char.name)} (${char.class}) [${typeLabel[agent?.type || ""] || "unknown"}]`
     );
+    console.log(`    HP: ${chalk.green(char.stats.hp)}/${char.stats.maxHp}   MP: ${chalk.blue(char.stats.mp)}/${char.stats.maxMp}`);
+    console.log(`    STR: ${char.stats.strength}  DEF: ${char.stats.defense}  MAG: ${char.stats.magic}  SPD: ${char.stats.speed}  LCK: ${char.stats.luck}`);
     console.log(`    Spells: ${char.spells.map((s) => s.name).join(", ")}`);
     console.log(`    Items: ${char.inventory.map((i) => `${i.name} x${i.quantity}`).join(", ")}`);
     console.log();
@@ -118,20 +116,30 @@ function printActionResult(result: import("../engine/types.js").CombatResult): v
 }
 
 function printHealthBars(characters: Character[]): void {
-  console.log(chalk.bold("  Health:"));
+  // Table header
+  console.log(chalk.bold("\n  ┌─────────────┬──────────────────┬──────────────────┬─────────────┐"));
+  console.log(chalk.bold("  │ Name        │ HP               │ MP               │ Position    │"));
+  console.log(chalk.bold("  ├─────────────┼──────────────────┼──────────────────┼─────────────┤"));
+
   for (const char of characters) {
     const hpPct = char.stats.hp / char.stats.maxHp;
-    const barLen = 20;
+    const barLen = 14;
     const filled = Math.round(hpPct * barLen);
-    const bar = "█".repeat(filled) + "░".repeat(barLen - filled);
-    const color = hpPct > 0.6 ? chalk.green : hpPct > 0.3 ? chalk.yellow : chalk.red;
+    const hpBar = "█".repeat(filled) + "░".repeat(barLen - filled);
+    const hpColor = hpPct > 0.6 ? chalk.green : hpPct > 0.3 ? chalk.yellow : chalk.red;
+
+    const mpPct = char.stats.mp / char.stats.maxMp;
+    const mpFilled = Math.round(mpPct * barLen);
+    const mpBar = "█".repeat(mpFilled) + "░".repeat(barLen - mpFilled);
+
+    const pos = char.position ? `(${char.position.x.toFixed(1)},${char.position.y.toFixed(1)})` : "?";
+    const status = char.statusEffects.length > 0 ? chalk.gray(` [${char.statusEffects.map((e) => e.type).join(", ")}]`) : "";
 
     console.log(
-      `  ${char.name}: ${color(bar)} ${char.stats.hp}/${char.stats.maxHp} HP | ${char.stats.mp}/${char.stats.maxMp} MP` +
-        (char.statusEffects.length > 0 ? ` | ${char.statusEffects.map((e) => e.type).join(", ")}` : "")
+      `  │ ${char.name.padEnd(11)} │ ${hpColor(hpBar)} ${String(char.stats.hp).padStart(3)}/${String(char.stats.maxHp).padEnd(3)} │ ${chalk.blue(mpBar)} ${String(char.stats.mp).padStart(3)}/${String(char.stats.maxMp).padEnd(3)} │ ${pos.padEnd(11)} │${status}`
     );
   }
-  console.log();
+  console.log(chalk.bold("  └─────────────┴──────────────────┴──────────────────┴─────────────┘\n"));
 }
 
 // ── Helpers ─────────────────────────────────────────────
