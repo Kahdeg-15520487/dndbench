@@ -140,7 +140,10 @@ function formatAction(action: import("../engine/types.js").CombatAction): string
   const parts: string[] = [action.type];
   if (action.spellId) parts.push(`spell="${action.spellId}"`);
   if (action.itemId) parts.push(`item="${action.itemId}"`);
-  if (action.targetId) parts.push(`target="${action.targetId}"`);
+  if (action.targetId) {
+    const targetName = charNames.get(action.targetId) ?? action.targetId;
+    parts.push(`target="${targetName}"`);
+  }
   return parts.join(" ");
 }
 
