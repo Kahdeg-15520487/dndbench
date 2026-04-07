@@ -13,10 +13,12 @@
 
 import { createCanvas, type CanvasRenderingContext2D } from "canvas";
 import type { ArenaConfig, Position } from "../engine/types.js";
+import { getTeamColor } from "../engine/types.js";
 
 export interface BattlefieldCharacter {
   id: string;
   name: string;
+  team: string;
   hp: number;
   maxHp: number;
   mp: number;
@@ -242,15 +244,18 @@ function drawCharacter(
     ctx.setLineDash([]);
   }
 
-  // Body circle
-  const isPlayer = char.id === "player" || char.id === "agent1";
+  // Body circle — color by team
+  const teamColor = getTeamColor(char.team);
   ctx.beginPath();
   ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-  ctx.fillStyle = isPlayer ? COLORS.playerFill : COLORS.enemyFill;
+  ctx.fillStyle = teamColor;
   ctx.fill();
-  ctx.strokeStyle = isPlayer ? COLORS.playerStroke : COLORS.enemyStroke;
+  // Slightly brighter stroke
+  ctx.strokeStyle = teamColor;
   ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.7;
   ctx.stroke();
+  ctx.globalAlpha = 1.0;
 
   // Character initial
   ctx.fillStyle = "#fff";

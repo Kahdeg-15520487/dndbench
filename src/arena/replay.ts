@@ -285,6 +285,7 @@ function generateBattlefieldImages(
       const bfChars: BattlefieldCharacter[] = turn.stateSnapshot.characters.map((c) => ({
         id: c.id,
         name: c.name,
+        team: c.team,
         hp: c.hp,
         maxHp: c.maxHp,
         mp: c.mp,
