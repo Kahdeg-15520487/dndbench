@@ -8,7 +8,11 @@ import {
   CombatAction,
   CombatResult,
   BossId,
+  MoveVector,
+  distance,
+  moveToward,
 } from "../engine/types.js";
+import { MELEE_RANGE } from "../engine/combat.js";
 
 type Phase = "normal" | "enraged" | "desperate";
 
@@ -32,6 +36,24 @@ export class BossAgent implements IAgent {
     const enemy = snapshot.characters.find((c) => c.id !== this.id)!;
     const hpPct = me.hp / me.maxHp;
     const phase: Phase = hpPct > 0.5 ? "normal" : hpPct > 0.25 ? "enraged" : "desperate";
+    const dist = distance(me.position, enemy.position);
+    const maxMove = 1.0 + 10 * 0.15; // rough speed estimate
+
+    // Helper: add movement toward enemy if out of range
+    const withMove = (action: CombatAction, requiredRange: number): CombatAction => {
+      if (dist > requiredRange) {
+        const move = moveToward(me.position, enemy.position, maxMove);
+        if (move) action.move = move;
+      }
+      return action;
+    };
+
+    // Store helpers for use in boss-specific AI
+    this._dist = dist;
+    this._maxMove = maxMove;
+    this._me = me;
+    this._enemy = enemy;
+    this._withMove = withMove;
 
     // ── Desperate (<25% HP) — survive at all costs ─────────
     if (phase === "desperate") {
@@ -60,7 +82,7 @@ export class BossAgent implements IAgent {
       const drainSpell = me.spells.find(
         (s) => s.id === "drain" && s.currentCooldown === 0 && me.mp >= s.mpCost
       );
-      if (drainSpell) return { type: "cast_spell", actorId: this.id, targetId: enemy.id, spellId: "drain" };
+      if (drainSpell) return this.cast("drain", enemy.id);
 
       // Defend
       return { type: "defend", actorId: this.id };
@@ -88,7 +110,7 @@ export class BossAgent implements IAgent {
     // Enraged: throw bombs
     if (phase === "enraged") {
       const bomb = me.inventory.find((i) => i.id === "bomb" && i.quantity > 0);
-      if (bomb && Math.random() > 0.3) return { type: "use_item", actorId: this.id, itemId: "bomb" };
+      if (bomb && Math.random() > 0.3) return this._withMove({ type: "use_item", actorId: this.id, itemId: "bomb" }, 6);
     }
 
     // Poison if enemy not poisoned
@@ -102,9 +124,9 @@ export class BossAgent implements IAgent {
 
     // Bomb for burst
     const bomb = me.inventory.find((i) => i.id === "bomb" && i.quantity > 0);
-    if (bomb && Math.random() > 0.6) return { type: "use_item", actorId: this.id, itemId: "bomb" };
+    if (bomb && Math.random() > 0.6) return this._withMove({ type: "use_item", actorId: this.id, itemId: "bomb" }, 6);
 
-    return { type: "attack", actorId: this.id, targetId: enemy.id };
+    return this.attackEnemy();
   }
 
   // ── Dark Wizard: cast strongest spell available ────────
@@ -135,7 +157,7 @@ export class BossAgent implements IAgent {
       if (drain) return this.cast(drain.id, enemy.id);
     }
 
-    return { type: "attack", actorId: this.id, targetId: enemy.id };
+    return this.attackEnemy();
   }
 
   // ── Ancient Dragon: alternating fire/physical + shield ─
@@ -162,7 +184,7 @@ export class BossAgent implements IAgent {
     if (lightning) return this.cast(lightning.id, enemy.id);
 
     // Fallback to powerful physical attacks
-    return { type: "attack", actorId: this.id, targetId: enemy.id };
+    return this.attackEnemy();
   }
 
   // ── Lich Lord: heal, drain, debuff, nuke ──────────────
@@ -205,7 +227,7 @@ export class BossAgent implements IAgent {
       if (spell) return this.cast(spell.id, enemy.id);
     }
 
-    return { type: "attack", actorId: this.id, targetId: enemy.id };
+    return this.attackEnemy();
   }
 
   // ── Demon Lord: adaptive strategy ─────────────────────
@@ -246,10 +268,16 @@ export class BossAgent implements IAgent {
     if (ice && Math.random() > 0.5) return this.cast(ice.id, enemy.id);
 
     // Physical attack with high STR
-    return { type: "attack", actorId: this.id, targetId: enemy.id };
+    return this.attackEnemy();
   }
 
   // ── Helpers ──────────────────────────────────────────
+
+  private _dist = 0;
+  private _maxMove = 0;
+  private _me!: BattleStateSnapshot["characters"][0];
+  private _enemy!: BattleStateSnapshot["characters"][0];
+  private _withMove: ((action: CombatAction, requiredRange: number) => CombatAction) = (a) => a;
 
   private readySpell(me: BattleStateSnapshot["characters"][0], spellId: string) {
     return me.spells.find(
@@ -258,7 +286,19 @@ export class BossAgent implements IAgent {
   }
 
   private cast(spellId: string, targetId: string): CombatAction {
-    return { type: "cast_spell", actorId: this.id, targetId, spellId };
+    const spell = this._me.spells.find(s => s.id === spellId);
+    const range = spell?.range ?? MELEE_RANGE;
+    return this._withMove(
+      { type: "cast_spell", actorId: this.id, targetId, spellId },
+      spell?.target === "self" ? 0 : range
+    );
+  }
+
+  private attackEnemy(): CombatAction {
+    return this._withMove(
+      { type: "attack", actorId: this.id, targetId: this._enemy.id },
+      MELEE_RANGE
+    );
   }
 
   onActionResult(_result: CombatResult): void {}

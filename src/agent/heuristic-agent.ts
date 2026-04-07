@@ -7,7 +7,11 @@ import {
   BattleStateSnapshot,
   CombatAction,
   CombatResult,
+  MoveVector,
+  distance,
+  moveToward,
 } from "../engine/types.js";
+import { MELEE_RANGE } from "../engine/combat.js";
 
 export class HeuristicAgent implements IAgent {
   readonly type = "heuristic" as const;
@@ -23,6 +27,17 @@ export class HeuristicAgent implements IAgent {
   async getAction(snapshot: BattleStateSnapshot): Promise<CombatAction> {
     const me = snapshot.characters.find((c) => c.id === this.id)!;
     const enemy = snapshot.characters.find((c) => c.id !== this.id)!;
+    const dist = distance(me.position, enemy.position);
+    const maxMove = 1.0 + 10 * 0.15; // rough speed estimate
+
+    // Helper: add movement toward enemy if out of range
+    const withMove = (action: CombatAction, requiredRange: number): CombatAction => {
+      if (dist > requiredRange) {
+        const move = moveToward(me.position, enemy.position, maxMove);
+        if (move) action.move = move;
+      }
+      return action;
+    };
 
     // ── Low HP — prioritize survival ───────────────────
     if (me.hp < me.maxHp * 0.3) {
@@ -66,7 +81,7 @@ export class HeuristicAgent implements IAgent {
     // ── Bomb if enemy healthy ──────────────────────────
     const bomb = me.inventory.find((i) => i.id === "bomb" && i.quantity > 0);
     if (bomb && enemy.hp > enemy.maxHp * 0.5 && Math.random() > 0.6) {
-      return { type: "use_item", actorId: this.id, itemId: "bomb" };
+      return withMove({ type: "use_item", actorId: this.id, itemId: "bomb" }, 6);
     }
 
     // ── Poison for attrition ──────────────────────────
@@ -80,12 +95,12 @@ export class HeuristicAgent implements IAgent {
       (e) => e.type === "poison"
     );
     if (poisonSpell && enemyNotPoisoned && Math.random() > 0.5) {
-      return {
+      return withMove({
         type: "cast_spell",
         actorId: this.id,
         targetId: enemy.id,
         spellId: "poison",
-      };
+      }, poisonSpell.range);
     }
 
     // ── Cast damage spells ─────────────────────────────
@@ -97,12 +112,12 @@ export class HeuristicAgent implements IAgent {
     );
     if (dmgSpells.length > 0 && Math.random() > 0.3) {
       const spell = dmgSpells[Math.floor(Math.random() * dmgSpells.length)];
-      return {
+      return withMove({
         type: "cast_spell",
         actorId: this.id,
         targetId: enemy.id,
-      spellId: spell.id as any,
-      };
+        spellId: spell.id as any,
+      }, spell.range);
     }
 
     // ── Shield if low MP ──────────────────────────────
@@ -128,7 +143,10 @@ export class HeuristicAgent implements IAgent {
     }
 
     // ── Default: attack ───────────────────────────────
-    return { type: "attack", actorId: this.id, targetId: enemy.id };
+    return withMove(
+      { type: "attack", actorId: this.id, targetId: enemy.id },
+      MELEE_RANGE
+    );
   }
 
   onActionResult(_result: CombatResult): void {}
