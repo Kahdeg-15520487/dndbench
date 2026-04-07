@@ -13,12 +13,18 @@ const emit = defineEmits<{
     llmConfigId?: number;
     gameCategory: "1v1" | "boss_exam";
   }];
+  startScenario: [config: {
+    participants: Array<{ name: string; role: string; team: string; agent: string; model?: string }>;
+    arena?: string;
+    winCondition?: string;
+    llmConfigId?: number;
+  }];
 }>();
 
 const name = ref("Hero");
 const charClass = ref("warrior");
 const enemyMode = ref("mock");
-const gameCategory = ref<"1v1" | "boss_exam">("1v1");
+const gameCategory = ref<"1v1" | "boss_exam" | "scenario">("1v1");
 const selectedLlmConfigId = ref<number | null>(null);
 
 // LLM configs from DB
@@ -158,11 +164,65 @@ async function deleteConfig(id: number) {
 
 const canStart = computed(() => {
   if (!props.connected) return false;
+  if (gameCategory.value === "scenario") return scenarioParticipants.value.length >= 2;
   if (gameCategory.value === "1v1" && enemyMode.value === "llm" && !selectedLlmConfigId.value && llmConfigs.value.length === 0) return false;
   return true;
 });
 
+// ── Scenario Builder ──────────────────────────────────
+
+const scenarioPresets = [
+  { label: "2v2 Team Battle", participants: [
+    { name: "Tank", role: "warrior", team: "red", agent: "heuristic" },
+    { name: "Nuke", role: "mage", team: "red", agent: "heuristic" },
+    { name: "Blade", role: "rogue", team: "blue", agent: "heuristic" },
+    { name: "Heals", role: "paladin", team: "blue", agent: "heuristic" },
+  ]},
+  { label: "Raid: 4 vs Dragon", participants: [
+    { name: "Tank", role: "paladin", team: "raid", agent: "heuristic" },
+    { name: "DPS", role: "rogue", team: "raid", agent: "heuristic" },
+    { name: "Mage", role: "mage", team: "raid", agent: "heuristic" },
+    { name: "Bruiser", role: "warrior", team: "raid", agent: "heuristic" },
+    { name: "Dragon", role: "ancient_dragon", team: "boss", agent: "boss" },
+  ]},
+  { label: "FFA: 4 Players", participants: [
+    { name: "Alpha", role: "warrior", team: "a", agent: "heuristic" },
+    { name: "Beta", role: "mage", team: "b", agent: "heuristic" },
+    { name: "Gamma", role: "rogue", team: "c", agent: "heuristic" },
+    { name: "Delta", role: "paladin", team: "d", agent: "heuristic" },
+  ]},
+];
+
+const scenarioParticipants = ref<Array<{ name: string; role: string; team: string; agent: string }>>([]);
+const scenarioArena = ref("");
+const scenarioWinCondition = ref("last_team_standing");
+
+const allRoles = ["warrior", "mage", "rogue", "paladin", "goblin_king", "dark_wizard", "ancient_dragon", "lich_lord", "demon_lord"];
+const allAgentTypes = ["heuristic", "boss"];
+
+function loadPreset(idx: number) {
+  scenarioParticipants.value = scenarioPresets[idx].participants.map(p => ({ ...p }));
+}
+
+function addParticipant() {
+  const team = String.fromCharCode(97 + scenarioParticipants.value.length); // a, b, c, ...
+  scenarioParticipants.value.push({ name: `Unit${scenarioParticipants.value.length + 1}`, role: "warrior", team, agent: "heuristic" });
+}
+
+function removeParticipant(idx: number) {
+  scenarioParticipants.value.splice(idx, 1);
+}
+
 function onStart() {
+  if (gameCategory.value === "scenario") {
+    emit("startScenario", {
+      participants: scenarioParticipants.value,
+      arena: scenarioArena.value || undefined,
+      winCondition: scenarioWinCondition.value,
+    });
+    return;
+  }
+
   emit("start", {
     name: name.value || "Hero",
     charClass: charClass.value,
@@ -199,6 +259,13 @@ function onStart() {
           >
             👹 Boss Exam
           </button>
+          <button
+            class="btn"
+            :class="{ active: gameCategory === 'scenario' }"
+            @click="gameCategory = 'scenario'"
+          >
+            👥 Scenario
+          </button>
         </div>
         <p class="hint" v-if="gameCategory === '1v1'">
           Classic duel — fight a random class AI opponent.
@@ -206,10 +273,13 @@ function onStart() {
         <p class="hint" v-if="gameCategory === 'boss_exam'">
           Fight 5 bosses of increasing difficulty. Fresh HP each fight. Graded at the end.
         </p>
+        <p class="hint" v-if="gameCategory === 'scenario'">
+          Custom N-unit battle: 2v2, raid boss, FFA, or any configuration.
+        </p>
       </div>
 
       <!-- ── Name ─────────────────────────────────── -->
-      <div class="form-group">
+      <div class="form-group" v-if="gameCategory !== 'scenario'">
         <label>Your Name</label>
         <input
           v-model="name"
@@ -221,7 +291,7 @@ function onStart() {
       </div>
 
       <!-- ── Class ────────────────────────────────── -->
-      <div class="form-group">
+      <div class="form-group" v-if="gameCategory !== 'scenario'">
         <label>Choose Your Class</label>
         <div class="class-grid">
           <button
@@ -237,6 +307,57 @@ function onStart() {
             <span class="class-desc">{{ c.desc }}</span>
             <span class="class-stats">{{ c.stats }}</span>
           </button>
+        </div>
+      </div>
+
+      <!-- ── Scenario Builder ─────────────────────────── -->
+      <div class="form-group" v-if="gameCategory === 'scenario'">
+        <label>Quick Presets</label>
+        <div class="preset-grid">
+          <button
+            v-for="(preset, idx) in scenarioPresets"
+            :key="idx"
+            class="btn btn-sm preset-btn"
+            @click="loadPreset(idx)"
+          >
+            {{ preset.label }}
+          </button>
+        </div>
+
+        <label style="margin-top: 12px">Participants</label>
+        <div class="participant-list">
+          <div v-for="(p, idx) in scenarioParticipants" :key="idx" class="participant-row">
+            <input v-model="p.name" placeholder="Name" class="p-name" />
+            <select v-model="p.role" class="p-select">
+              <option v-for="r in allRoles" :key="r" :value="r">{{ r }}</option>
+            </select>
+            <input v-model="p.team" placeholder="Team" class="p-team" />
+            <select v-model="p.agent" class="p-select p-agent">
+              <option value="heuristic">🤖 AI</option>
+              <option value="boss">👹 Boss</option>
+            </select>
+            <button class="btn-remove" @click="removeParticipant(idx)" v-if="scenarioParticipants.length > 2">✕</button>
+          </div>
+        </div>
+        <button class="btn btn-sm btn-add" @click="addParticipant">+ Add Participant</button>
+
+        <div class="form-row" style="margin-top: 12px">
+          <label>Arena <span class="optional">(optional)</span></label>
+          <select v-model="scenarioArena" class="p-select">
+            <option value="">Auto (based on count)</option>
+            <option value="small">Small (16×10)</option>
+            <option value="medium">Medium (20×12)</option>
+            <option value="large">Large (28×16)</option>
+            <option value="boss_room">Boss Room (24×16)</option>
+            <option value="grand">Grand (36×20)</option>
+          </select>
+        </div>
+        <div class="form-row" style="margin-top: 8px">
+          <label>Win Condition</label>
+          <select v-model="scenarioWinCondition" class="p-select">
+            <option value="last_team_standing">Last Team Standing</option>
+            <option value="last_unit_standing">Last Unit Standing (FFA)</option>
+          </select>
         </div>
       </div>
 
@@ -333,7 +454,9 @@ function onStart() {
 
       <button class="btn-accent start-btn" :disabled="!canStart" @click="onStart">
         {{ connected
-          ? gameCategory === 'boss_exam' ? '👹 Start Boss Exam' : '⚔️ Start Battle'
+          ? gameCategory === 'boss_exam' ? '👹 Start Boss Exam'
+          : gameCategory === 'scenario' ? `⚔️ Start Scenario (${scenarioParticipants.length} units)`
+          : '⚔️ Start Battle'
           : 'Connecting...' }}
       </button>
     </div>
@@ -584,6 +707,72 @@ input:focus {
   gap: 8px;
   justify-content: flex-end;
 }
+
+/* ── Scenario Builder ─────────────────────────────── */
+.preset-grid {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.preset-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.preset-btn:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg));
+}
+
+.participant-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.participant-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.p-name {
+  width: 70px;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+}
+.p-team {
+  width: 50px;
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+  text-align: center;
+}
+.p-select {
+  padding: 4px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 12px;
+}
+.p-agent { width: 70px; }
+.btn-remove {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.btn-remove:hover { color: #f87171; background: rgba(248,113,113,0.1); }
 
 /* ── Start Button ───────────────────────────────────── */
 .start-btn {
