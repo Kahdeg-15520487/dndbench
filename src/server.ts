@@ -191,7 +191,13 @@ interface ClientMessage {
  */
 class GameSession {
   private ws: WebSocket;
-  private humanAgent?: HumanAgent;
+  /** All human agents, keyed by character ID */
+  private humanAgents = new Map<string, HumanAgent>();
+  /** Convenience: single human agent for 1v1/boss_exam */
+  private get humanAgent(): HumanAgent | undefined {
+    const first = this.humanAgents.values().next().value;
+    return first;
+  }
   private enemyAgent?: IAgent;
   private runner?: BattleRunner;
   private playerChar?: Character;
@@ -256,20 +262,22 @@ class GameSession {
     this.playerChar = createCharacter("player", playerName, playerClass);
     this.enemyChar = createCharacter("enemy", "AI Opponent", enemyClass);
 
-    this.humanAgent = new HumanAgent("player", playerName);
+    this.humanAgents.clear();
+    this.humanAgents.set("player", new HumanAgent("player", playerName));
     this.enemyAgent = await this.createEnemyAgent(
       msg.enemyMode || "mock",
       enemyClass,
       msg.llmConfigId
     );
 
+    const humanAgent1v1 = this.humanAgents.get("player")!;
     this.startTime = Date.now();
 
     const wsRenderer = createWsRenderer(this.ws, "player");
 
     this.runner = new BattleRunner(
       [this.playerChar, this.enemyChar],
-      [this.humanAgent, this.enemyAgent],
+      [humanAgent1v1, this.enemyAgent],
       {
         maxTurns: 50,
         turnDelayMs: 0,
@@ -338,16 +346,18 @@ class GameSession {
       totalBosses: BOSS_RUSH_ORDER.length,
     });
 
-    this.humanAgent = new HumanAgent("player", config.name);
+    this.humanAgents.clear();
+    this.humanAgents.set("player", new HumanAgent("player", config.name));
     this.enemyAgent = new BossAgent("boss", bossProfile.name, bossId);
 
+    const humanAgentBoss = this.humanAgents.get("player")!;
     this.startTime = Date.now();
 
     const wsRenderer = createWsRenderer(this.ws, "player");
 
     this.runner = new BattleRunner(
       [this.playerChar, this.enemyChar],
-      [this.humanAgent, this.enemyAgent],
+      [humanAgentBoss, this.enemyAgent],
       {
         maxTurns: 50,
         turnDelayMs: 0,
@@ -474,7 +484,7 @@ class GameSession {
           const human = new HumanAgent(id, cfg.name);
           humanIds.push(id);
           agent = human;
-          this.humanAgent = human; // store for action submission
+          this.humanAgents.set(id, human); // store for action submission
           break;
         }
         case "llm": {
@@ -549,10 +559,36 @@ class GameSession {
   // ── Human Input ─────────────────────────────────────
 
   private handleHumanAction(msg: ClientMessage) {
-    if (!msg.action || !this.humanAgent) return;
+    if (!msg.action) return;
 
     const raw = msg.action;
-    const actorId = this.humanAgent.id;
+
+    // Find the human agent that's currently waiting for input
+    let waitingAgent: HumanAgent | undefined;
+    let actorId: string = "";
+
+    if (this.humanAgents.size === 0) return;
+
+    if (this.humanAgents.size === 1) {
+      // 1v1 / boss_exam — only one human
+      waitingAgent = this.humanAgents.values().next().value;
+      actorId = waitingAgent!.id;
+    } else {
+      // Scenario with potentially multiple humans
+      // Find the agent whose turn it currently is (isWaiting === true)
+      for (const [id, agent] of this.humanAgents) {
+        if (agent.isWaiting) {
+          waitingAgent = agent;
+          actorId = id;
+          break;
+        }
+      }
+      if (!waitingAgent) {
+        // Fallback: use the first human
+        waitingAgent = this.humanAgents.values().next().value;
+        actorId = waitingAgent!.id;
+      }
+    }
 
     // Resolve target: "self" → own ID, otherwise look up by name or pass as-is
     let targetId: string | undefined;
@@ -578,7 +614,7 @@ class GameSession {
         : undefined,
     };
 
-    this.humanAgent.submitAction(action);
+    waitingAgent!.submitAction(action);
   }
 
   // ── Agent Factory ───────────────────────────────────
@@ -660,12 +696,15 @@ class GameSession {
   }
 
   destroy() {
-    this.humanAgent?.destroy();
+    for (const agent of this.humanAgents.values()) {
+      agent.destroy();
+    }
+    this.humanAgents.clear();
     this.enemyAgent?.destroy?.();
     // Clean up scenario agents
     if (this.scenarioAgents) {
       for (const agent of this.scenarioAgents) {
-        if (agent !== this.humanAgent && agent !== this.enemyAgent) {
+        if (!this.humanAgents.has(agent.id) && agent !== this.enemyAgent) {
           agent.destroy?.();
         }
       }
