@@ -4,80 +4,184 @@
 
 ## Pending
 
-- [ ] **#25** Phase 6: Battlefield renderer — draw N units with team colors, labels
+- [ ] **#39** **[critical]** D&D 5e rebalance design document — compile all research data into design plan
+- [ ] **#49** Build and test everything compiles + runs
 
 ## Completed
 
-- [x] **#21** **[high]** Phase 2: BattleRunner multi-unit — accept N characters/agents, team-aware defeat checks, per-turn N action resolution, turn order by speed across all units
-- [x] **#22** **[high]** Phase 3: Agent updates — HeuristicAgent targets weakest enemy, BossAgent handles multiple enemies, LLM agent sees all combatants
-- [x] **#23** Phase 4: CLI & entry point — team setup mode, --teams flag, raid boss mode, FFA mode
-- [x] **#24** Phase 5: Start positions for N units — formation presets, spread patterns for teams
-- [x] **#26** **[low]** Phase 7: Test a 2v2 and a raid battle end-to-end
+- [x] **#31** **[low]** Animated GIF replay encoding for multi-frame visualization
+- [x] **#36** **[high]** Fix server to support multiple human agents in scenario mode #bug
+- [x] **#37** Animated GIF replay encoding for multi-frame visualization #enhancement
+- [x] **#38** End-to-end test: run 2v2 via CLI to verify recent changes work #test
+- [x] **#40** **[critical]** Write core engine: types.ts (ability scores, spell slots, weapon defs, arena in feet)
+- [x] **#41** **[critical]** Write characters.ts (D&D 5e Level 5 class presets, spell definitions)
+- [x] **#42** **[critical]** Write bosses.ts (D&D 5e monster stat blocks)
+- [x] **#43** **[critical]** Write combat.ts (d20 attack rolls, AC, saving throws, spell slots, class features)
+- [x] **#44** **[critical]** Update battle-runner.ts (DiceRoller integration, Extra Attack, spell slot tracking)
+- [x] **#45** **[high]** Update agents: heuristic, boss, LLM (new actions, spell slots, D&D mechanics)
+- [x] **#46** **[high]** Update agents (heuristic, boss, LLM) + tools/definitions.ts
+- [x] **#47** **[high]** Update renderers: cli-renderer, ws-renderer, replay.ts, BattleView.vue
+- [x] **#48** Update index.ts entry point + server.ts for new types
 
 <!-- Raw Data -->
 ```json
 {
   "todos": [
     {
-      "id": 21,
-      "text": "Phase 2: BattleRunner multi-unit — accept N characters/agents, team-aware defeat checks, per-turn N action resolution, turn order by speed across all units",
-      "done": true,
-      "priority": "high",
-      "tags": [],
-      "createdAt": 1775534898304,
-      "archived": false,
-      "completedAt": 1775535591044
-    },
-    {
-      "id": 22,
-      "text": "Phase 3: Agent updates — HeuristicAgent targets weakest enemy, BossAgent handles multiple enemies, LLM agent sees all combatants",
-      "done": true,
-      "priority": "high",
-      "tags": [],
-      "createdAt": 1775534904459,
-      "archived": false,
-      "completedAt": 1775535837893
-    },
-    {
-      "id": 23,
-      "text": "Phase 4: CLI & entry point — team setup mode, --teams flag, raid boss mode, FFA mode",
-      "done": true,
-      "priority": "medium",
-      "tags": [],
-      "createdAt": 1775534918092,
-      "archived": false,
-      "completedAt": 1775536001255
-    },
-    {
-      "id": 24,
-      "text": "Phase 5: Start positions for N units — formation presets, spread patterns for teams",
-      "done": true,
-      "priority": "medium",
-      "tags": [],
-      "createdAt": 1775534925106,
-      "archived": false,
-      "completedAt": 1775536336436
-    },
-    {
-      "id": 25,
-      "text": "Phase 6: Battlefield renderer — draw N units with team colors, labels",
-      "done": false,
-      "priority": "medium",
-      "tags": [],
-      "createdAt": 1775534933651,
-      "archived": false
-    },
-    {
-      "id": 26,
-      "text": "Phase 7: Test a 2v2 and a raid battle end-to-end",
+      "id": 31,
+      "text": "Animated GIF replay encoding for multi-frame visualization",
       "done": true,
       "priority": "low",
       "tags": [],
-      "createdAt": 1775534940228,
+      "createdAt": 1775536827013,
       "archived": false,
-      "completedAt": 1775536346327
+      "completedAt": 1775538931022
+    },
+    {
+      "id": 36,
+      "text": "Fix server to support multiple human agents in scenario mode",
+      "done": true,
+      "priority": "high",
+      "tags": [
+        "bug"
+      ],
+      "createdAt": 1775538297364,
+      "archived": false,
+      "completedAt": 1775538550063
+    },
+    {
+      "id": 37,
+      "text": "Animated GIF replay encoding for multi-frame visualization",
+      "done": true,
+      "priority": "medium",
+      "tags": [
+        "enhancement"
+      ],
+      "createdAt": 1775538301464,
+      "archived": false,
+      "completedAt": 1775538925000
+    },
+    {
+      "id": 38,
+      "text": "End-to-end test: run 2v2 via CLI to verify recent changes work",
+      "done": true,
+      "priority": "medium",
+      "tags": [
+        "test"
+      ],
+      "createdAt": 1775538309822,
+      "archived": false,
+      "completedAt": 1775538553508
+    },
+    {
+      "id": 39,
+      "text": "D&D 5e rebalance design document — compile all research data into design plan",
+      "done": false,
+      "priority": "critical",
+      "tags": [],
+      "createdAt": 1775552204138,
+      "archived": false
+    },
+    {
+      "id": 40,
+      "text": "Write core engine: types.ts (ability scores, spell slots, weapon defs, arena in feet)",
+      "done": true,
+      "priority": "critical",
+      "tags": [],
+      "createdAt": 1775554881508,
+      "archived": false,
+      "completedAt": 1775555592527
+    },
+    {
+      "id": 41,
+      "text": "Write characters.ts (D&D 5e Level 5 class presets, spell definitions)",
+      "done": true,
+      "priority": "critical",
+      "tags": [],
+      "createdAt": 1775554894885,
+      "archived": false,
+      "completedAt": 1775565727070
+    },
+    {
+      "id": 42,
+      "text": "Write bosses.ts (D&D 5e monster stat blocks)",
+      "done": true,
+      "priority": "critical",
+      "tags": [],
+      "createdAt": 1775554907654,
+      "archived": false,
+      "completedAt": 1775565793030
+    },
+    {
+      "id": 43,
+      "text": "Write combat.ts (d20 attack rolls, AC, saving throws, spell slots, class features)",
+      "done": true,
+      "priority": "critical",
+      "tags": [],
+      "createdAt": 1775554914069,
+      "archived": false,
+      "completedAt": 1775566033983
+    },
+    {
+      "id": 44,
+      "text": "Update battle-runner.ts (DiceRoller integration, Extra Attack, spell slot tracking)",
+      "done": true,
+      "priority": "critical",
+      "tags": [],
+      "createdAt": 1775554919816,
+      "archived": false,
+      "completedAt": 1775566116672
+    },
+    {
+      "id": 45,
+      "text": "Update agents: heuristic, boss, LLM (new actions, spell slots, D&D mechanics)",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775554929157,
+      "archived": false,
+      "completedAt": 1775567518857
+    },
+    {
+      "id": 46,
+      "text": "Update agents (heuristic, boss, LLM) + tools/definitions.ts",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775554933495,
+      "archived": false,
+      "completedAt": 1775567521994
+    },
+    {
+      "id": 47,
+      "text": "Update renderers: cli-renderer, ws-renderer, replay.ts, BattleView.vue",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775554942308,
+      "archived": false,
+      "completedAt": 1775567527482
+    },
+    {
+      "id": 48,
+      "text": "Update index.ts entry point + server.ts for new types",
+      "done": true,
+      "priority": "medium",
+      "tags": [],
+      "createdAt": 1775554947411,
+      "archived": false,
+      "completedAt": 1775567533195
+    },
+    {
+      "id": 49,
+      "text": "Build and test everything compiles + runs",
+      "done": false,
+      "priority": "medium",
+      "tags": [],
+      "createdAt": 1775554951282,
+      "archived": false
     }
   ],
-  "nextId": 27
+  "nextId": 50
 }
 ```

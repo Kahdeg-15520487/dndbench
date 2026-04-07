@@ -178,8 +178,8 @@ function printBattleStart(characters: Character[], agentMap: Map<string, IAgent>
     console.log(
       `  ${chalk.bold(char.name)} (${char.class}) [${typeLabel[agent?.type || ""] || "unknown"}]`
     );
-    console.log(`    HP: ${chalk.green(char.stats.hp)}/${char.stats.maxHp}   MP: ${chalk.blue(char.stats.mp)}/${char.stats.maxMp}`);
-    console.log(`    STR: ${char.stats.strength}  DEF: ${char.stats.defense}  MAG: ${char.stats.magic}  SPD: ${char.stats.speed}  LCK: ${char.stats.luck}`);
+    console.log(`    HP: ${chalk.green(char.stats.hp)}/${char.stats.maxHp}   AC: ${chalk.yellow(char.stats.ac)}   SPD: ${char.stats.speed}ft`);
+    console.log(`    STR: ${char.stats.str}  DEX: ${char.stats.dex}  CON: ${char.stats.con}  INT: ${char.stats.int}  WIS: ${char.stats.wis}  CHA: ${char.stats.cha}`);
     console.log(`    Spells: ${char.spells.map((s) => s.name).join(", ")}`);
     console.log(`    Items: ${char.inventory.map((i) => `${i.name} x${i.quantity}`).join(", ")}`);
     console.log();
@@ -198,8 +198,8 @@ function printActionResult(result: import("../engine/types.js").CombatResult): v
       )
     );
   }
-  if (result.spell?.mpRemaining !== undefined) {
-    console.log(chalk.gray(`    → MP remaining: ${result.spell.mpRemaining}`));
+  if (result.spell?.slotUsed !== undefined) {
+    console.log(chalk.gray(`    → Spell slot used: ${result.spell.slotUsed}${result.spell.slotsRemaining ? `, remaining: ${JSON.stringify(result.spell.slotsRemaining)}` : ""}`));
   }
   console.log();
 }
@@ -218,12 +218,13 @@ function printHealthBars(characters: Character[]): void {
   // Column widths (visual chars between │ │)
   const COL_NAME = 12;
   const COL_STAT = 20;  // bar(10) + " " + "NNN/NNN"
+  const COL_AC   = 6;   // "AC NN"
   const COL_POS  = 11;
 
-  const top    = `  ┌${"─".repeat(COL_NAME)}┬${"─".repeat(COL_STAT)}┬${"─".repeat(COL_STAT)}┬${"─".repeat(COL_POS)}┐`;
-  const header = `  │${padVisual(" Name", COL_NAME)}│${padVisual(" HP", COL_STAT)}│${padVisual(" MP", COL_STAT)}│${padVisual(" Position", COL_POS)}│`;
-  const sep    = `  ├${"─".repeat(COL_NAME)}┼${"─".repeat(COL_STAT)}┼${"─".repeat(COL_STAT)}┼${"─".repeat(COL_POS)}┤`;
-  const bottom = `  └${"─".repeat(COL_NAME)}┴${"─".repeat(COL_STAT)}┴${"─".repeat(COL_STAT)}┴${"─".repeat(COL_POS)}┘`;
+  const top    = `  ┌${"─".repeat(COL_NAME)}┬${"─".repeat(COL_STAT)}┬${"─".repeat(COL_AC)}┬${"─".repeat(COL_POS)}┐`;
+  const header = `  │${padVisual(" Name", COL_NAME)}│${padVisual(" HP", COL_STAT)}│${padVisual(" AC", COL_AC)}│${padVisual(" Position", COL_POS)}│`;
+  const sep    = `  ├${"─".repeat(COL_NAME)}┼${"─".repeat(COL_STAT)}┼${"─".repeat(COL_AC)}┼${"─".repeat(COL_POS)}┤`;
+  const bottom = `  └${"─".repeat(COL_NAME)}┴${"─".repeat(COL_STAT)}┴${"─".repeat(COL_AC)}┴${"─".repeat(COL_POS)}┘`;
 
   console.log(chalk.bold("\n" + top));
   console.log(chalk.bold(header));
@@ -237,19 +238,15 @@ function printHealthBars(characters: Character[]): void {
     const hpColor = hpPct > 0.6 ? chalk.green : hpPct > 0.3 ? chalk.yellow : chalk.red;
     const hpText = `${char.stats.hp}/${char.stats.maxHp}`;
 
-    const mpPct = char.stats.maxMp > 0 ? char.stats.mp / char.stats.maxMp : 0;
-    const mpFilled = Math.round(mpPct * barLen);
-    const mpBar = "█".repeat(mpFilled) + "░".repeat(barLen - mpFilled);
-    const mpText = `${char.stats.mp}/${char.stats.maxMp}`;
+    const ac = padVisual(chalk.yellow(" AC " + char.stats.ac), COL_AC);
 
     const pos = char.position ? `(${char.position.x.toFixed(1)},${char.position.y.toFixed(1)})` : "(?,?)";
     const status = char.statusEffects.length > 0 ? chalk.gray(` [${char.statusEffects.map((e) => e.type).join(", ")}]`) : "";
 
     const name = chalk.bold(char.name);
     const hp = padVisual(hpColor(hpBar) + " " + hpText, COL_STAT);
-    const mp = padVisual(chalk.blue(mpBar) + " " + mpText, COL_STAT);
 
-    console.log(`  │${padVisual(" " + name, COL_NAME)}│${hp}│${mp}│${padVisual(" " + pos, COL_POS)}│${status}`);
+    console.log(`  │${padVisual(" " + name, COL_NAME)}│${hp}│${ac}│${padVisual(" " + pos, COL_POS)}│${status}`);
   }
   console.log(chalk.bold(bottom + "\n"));
 }

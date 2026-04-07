@@ -12,7 +12,7 @@
 // ─────────────────────────────────────────────────────────
 
 import { createCharacter } from "./engine/characters.js";
-import { createBoss, getBossProfile, getAllBossProfiles, BOSS_RUSH_ORDER } from "./engine/bosses.js";
+import { createBoss, getBossProfile, getAllBosses, BOSS_ORDER } from "./engine/bosses.js";
 import { HeuristicAgent, LLMAgent, BossAgent } from "./agent/index.js";
 import type { IAgent } from "./agent/index.js";
 import { BattleRunner } from "./arena/battle-runner.js";
@@ -365,12 +365,12 @@ async function runBossExam(opts: CliOptions) {
   console.log(`  Agent: ${opts.agent1Name} (${opts.agent1Class}) [${agentMode === 'llm' ? '🧠 LLM' : '🤖 Mock'}]`);
   console.log(chalk.dim(`  ${"─".repeat(50)}\n`));
 
-  for (let i = 0; i < BOSS_RUSH_ORDER.length; i++) {
-    const bossId = BOSS_RUSH_ORDER[i];
-    const bossProfile = getBossProfile(bossId);
+  for (let i = 0; i < BOSS_ORDER.length; i++) {
+    const bossId = BOSS_ORDER[i];
+    const bossProfile = getBossProfile(bossId)!;
 
-    console.log(chalk.bold.yellow(`━━━ Boss ${i + 1}/${BOSS_RUSH_ORDER.length}: ${bossProfile.emoji} ${bossProfile.name} — ${bossProfile.title} ━━━`));
-    console.log(chalk.dim(`  HP:${bossProfile.stats.maxHp} MP:${bossProfile.stats.maxMp} STR:${bossProfile.stats.strength} DEF:${bossProfile.stats.defense} MAG:${bossProfile.stats.magic} SPD:${bossProfile.stats.speed}`));
+    console.log(chalk.bold.yellow(`━━━ Boss ${i + 1}/${BOSS_ORDER.length}: ${bossProfile.emoji} ${bossProfile.name} — ${bossProfile.title} ━━━`));
+    console.log(chalk.dim(`  HP:${bossProfile.hp} AC:${bossProfile.ac} STR:${bossProfile.abilities.str} DEX:${bossProfile.abilities.dex} SPD:${bossProfile.speed}ft`));
     console.log();
 
     // Fresh character each fight

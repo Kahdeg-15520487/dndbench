@@ -1,19 +1,21 @@
 // ─────────────────────────────────────────────────────────
-//  Boss Definitions — 5 tiers of increasing difficulty
+//  Boss Definitions — D&D 5e Monster Stat Blocks
 // ─────────────────────────────────────────────────────────
-
 import {
-  Character,
-  Stats,
-  Spell,
-  SpellId,
-  InventoryItem,
-  ItemId,
-  BossId,
+  Character, Stats, Spell, SpellId, InventoryItem, ItemId,
+  BossId, SpellSlotGrid, WeaponDef, ClassFeature, ClassFeatureId, AbilityName,
 } from "./types.js";
 import { ALL_SPELLS } from "./characters.js";
 
-// ── Boss Profiles ───────────────────────────────────────
+const PROF_BONUS = 3;
+
+function mod(score: number): number {
+  return Math.floor((score - 10) / 2);
+}
+
+// ═══════════════════════════════════════════════════════
+//  Boss Profiles — 5 tiers of increasing difficulty
+// ═══════════════════════════════════════════════════════
 
 interface BossProfile {
   id: BossId;
@@ -21,9 +23,15 @@ interface BossProfile {
   emoji: string;
   title: string;
   tier: number;
-  stats: Omit<Stats, "hp" | "mp"> & { maxHp: number; maxMp: number };
+  abilities: { str: number; dex: number; con: number; int: number; wis: number; cha: number };
+  ac: number;
+  speed: number;
+  hp: number;
+  weapon: WeaponDef;
+  spellSlots: SpellSlotGrid;
   spells: SpellId[];
-  inventory: { id: ItemId; qty: number }[];
+  features: { id: ClassFeatureId; usesPerBattle: number }[];
+  items: { id: ItemId; qty: number }[];
   description: string;
 }
 
@@ -34,12 +42,16 @@ const BOSSES: BossProfile[] = [
     emoji: "👑",
     title: "King of the Swamp",
     tier: 1,
-    stats: { maxHp: 150, maxMp: 30, strength: 16, defense: 12, magic: 5, speed: 8, luck: 12 },
-    spells: ["fire", "poison"],
-    inventory: [
-      { id: "health_potion", qty: 2 },
-      { id: "bomb", qty: 2 },
+    abilities: { str: 16, dex: 14, con: 14, int: 10, wis: 10, cha: 12 },
+    ac: 15, speed: 30, hp: 65,
+    weapon: { name: "Scimitar", damageDice: "1d6", abilityMod: "str", range: 5, properties: ["finesse"] },
+    spellSlots: {},
+    spells: [],
+    features: [
+      { id: "extra_attack", usesPerBattle: 0 },
+      { id: "second_wind", usesPerBattle: 1 },
     ],
+    items: [{ id: "health_potion", qty: 2 }, { id: "bomb", qty: 2 }],
     description: "A cunning goblin chieftain with poisoned blades and explosives.",
   },
   {
@@ -48,127 +60,154 @@ const BOSSES: BossProfile[] = [
     emoji: "🧙",
     title: "Master of Arcane",
     tier: 2,
-    stats: { maxHp: 130, maxMp: 150, strength: 5, defense: 8, magic: 26, speed: 14, luck: 14 },
-    spells: ["fire", "ice", "lightning", "poison", "drain", "meteor"],
-    inventory: [
-      { id: "mana_potion", qty: 3 },
-      { id: "health_potion", qty: 1 },
-    ],
-    description: "A powerful sorcerer wielding devastating magic. Glass cannon with Meteor.",
+    abilities: { str: 6, dex: 14, con: 12, int: 18, wis: 14, cha: 12 },
+    ac: 13, speed: 30, hp: 60,
+    weapon: { name: "Quarterstaff", damageDice: "1d6", abilityMod: "str", range: 5, properties: ["versatile"] },
+    spellSlots: { 1: { total: 4, used: 0 }, 2: { total: 3, used: 0 }, 3: { total: 2, used: 0 } },
+    spells: ["fire_bolt", "magic_missile", "shield", "thunderwave", "scorching_ray", "hold_person", "fireball"],
+    features: [{ id: "arcane_recovery", usesPerBattle: 1 }],
+    items: [{ id: "health_potion", qty: 2 }, { id: "greater_health_potion", qty: 1 }],
+    description: "A powerful sorcerer wielding devastating magic. Glass cannon with Fireball.",
   },
   {
     id: "ancient_dragon",
     name: "Ancient Dragon",
     emoji: "🐉",
-    title: "Scourge of the Realm",
+    title: "Terror of the Skies",
     tier: 3,
-    stats: { maxHp: 280, maxMp: 80, strength: 24, defense: 20, magic: 18, speed: 16, luck: 10 },
-    spells: ["fire", "lightning", "shield", "meteor"],
-    inventory: [
-      { id: "health_potion", qty: 3 },
+    abilities: { str: 24, dex: 10, con: 22, int: 14, wis: 16, cha: 18 },
+    ac: 20, speed: 40, hp: 200,
+    weapon: { name: "Bite", damageDice: "2d10", abilityMod: "str", range: 10, properties: ["reach"] },
+    spellSlots: {},
+    spells: [],
+    features: [
+      { id: "extra_attack", usesPerBattle: 0 },
+      { id: "action_surge", usesPerBattle: 1 },
     ],
-    description: "An ancient wyrm with impenetrable scales and fiery breath.",
+    items: [],
+    description: "An enormous dragon with devastating multiattack and breath weapon.",
   },
   {
     id: "lich_lord",
     name: "Lich Lord",
     emoji: "💀",
-    title: "The Undying",
+    title: "Eternal Necromancer",
     tier: 4,
-    stats: { maxHp: 200, maxMp: 200, strength: 8, defense: 15, magic: 28, speed: 12, luck: 15 },
-    spells: ["fire", "ice", "lightning", "heal", "shield", "poison", "drain", "meteor"],
-    inventory: [
-      { id: "mana_potion", qty: 4 },
-      { id: "health_potion", qty: 2 },
-      { id: "elixir", qty: 1 },
-    ],
-    description: "An undead archmage with all 8 spells and limitless mana. Never stays dead.",
+    abilities: { str: 8, dex: 14, con: 16, int: 22, wis: 18, cha: 20 },
+    ac: 17, speed: 30, hp: 135,
+    weapon: { name: "Necrotic Touch", damageDice: "1d8", abilityMod: "int", range: 5, properties: ["magical"] },
+    spellSlots: { 1: { total: 4, used: 0 }, 2: { total: 3, used: 0 }, 3: { total: 3, used: 0 } },
+    spells: ["fire_bolt", "magic_missile", "shield", "thunderwave", "scorching_ray", "hold_person", "fireball", "lightning_bolt"],
+    features: [{ id: "arcane_recovery", usesPerBattle: 1 }],
+    items: [{ id: "health_potion", qty: 3 }],
+    description: "An undead archmage with immense magical power and spell slots.",
   },
   {
     id: "demon_lord",
     name: "Demon Lord",
-    emoji: "😈",
-    title: "End of All Things",
+    emoji: "👹",
+    title: "Lord of the Abyss",
     tier: 5,
-    stats: { maxHp: 400, maxMp: 150, strength: 22, defense: 18, magic: 24, speed: 18, luck: 15 },
-    spells: ["fire", "ice", "lightning", "poison", "drain", "meteor"],
-    inventory: [
-      { id: "health_potion", qty: 5 },
-      { id: "mana_potion", qty: 3 },
-      { id: "elixir", qty: 1 },
+    abilities: { str: 26, dex: 14, con: 24, int: 16, wis: 18, cha: 22 },
+    ac: 22, speed: 40, hp: 300,
+    weapon: { name: "Flaming Greatsword", damageDice: "3d6", abilityMod: "str", range: 10, properties: ["heavy", "reach", "magical"] },
+    spellSlots: { 1: { total: 4, used: 0 }, 2: { total: 3, used: 0 }, 3: { total: 3, used: 0 } },
+    spells: ["fire_bolt", "fireball", "lightning_bolt", "shield"],
+    features: [
+      { id: "extra_attack", usesPerBattle: 0 },
+      { id: "action_surge", usesPerBattle: 2 },
+      { id: "second_wind", usesPerBattle: 2 },
     ],
-    description: "The ultimate adversary. Immense power, cunning strategy, no weakness.",
+    items: [],
+    description: "An apex predator from the Abyss. Immense HP, AC, and devastating attacks.",
   },
 ];
 
-// ── Item definitions (reuse from characters.ts) ──────────
+const BOSS_MAP = new Map(BOSSES.map(b => [b.id, b]));
 
-const ALL_ITEMS: Record<ItemId, Omit<InventoryItem, "quantity">> = {
-  health_potion: { id: "health_potion", name: "Health Potion", description: "Restore 40 HP.", type: "heal_hp", potency: 40, range: 0 },
-  mana_potion: { id: "mana_potion", name: "Mana Potion", description: "Restore 30 MP.", type: "heal_mp", potency: 30, range: 0 },
-  antidote: { id: "antidote", name: "Antidote", description: "Cure all status effects.", type: "cure", potency: 0, range: 0 },
-  bomb: { id: "bomb", name: "Bomb", description: "Deal 35 fixed damage to the enemy.", type: "damage", potency: 35, range: 6 },
-  elixir: { id: "elixir", name: "Elixir", description: "Fully restore HP and MP.", type: "full_restore", potency: 0, range: 0 },
-};
-
-// ── Factory ─────────────────────────────────────────────
-
-export function createBoss(bossId: BossId): Character {
-  const profile = BOSSES.find((b) => b.id === bossId);
-  if (!profile) throw new Error(`Unknown boss: ${bossId}`);
-
-  const stats: Stats = {
-    maxHp: profile.stats.maxHp,
-    hp: profile.stats.maxHp,
-    maxMp: profile.stats.maxMp,
-    mp: profile.stats.maxMp,
-    strength: profile.stats.strength,
-    defense: profile.stats.defense,
-    magic: profile.stats.magic,
-    speed: profile.stats.speed,
-    luck: profile.stats.luck,
-  };
-
-  const spells: Spell[] = profile.spells.map((sid) => ({
-    ...ALL_SPELLS[sid],
-    currentCooldown: 0,
-  }));
-
-  const inventory: InventoryItem[] = profile.inventory.map((entry) => ({
-    ...ALL_ITEMS[entry.id],
-    quantity: entry.qty,
-  }));
-
-  return {
-    id: "boss",
-    name: profile.name,
-    team: "boss",
-    class: "boss" as any, // bosses don't have a standard class
-    stats,
-    statusEffects: [],
-    spells,
-    inventory,
-    isDefending: false,
-    actionHistory: [],
-    position: { x: 0, y: 0 },
-  };
+export function getBossProfile(id: BossId): BossProfile | undefined {
+  return BOSS_MAP.get(id);
 }
 
-export function getBossProfile(bossId: BossId): BossProfile {
-  const p = BOSSES.find((b) => b.id === bossId);
-  if (!p) throw new Error(`Unknown boss: ${bossId}`);
-  return p;
-}
-
-export function getAllBossProfiles(): BossProfile[] {
+export function getAllBosses(): BossProfile[] {
   return [...BOSSES];
 }
 
-/** Boss order for boss rush mode */
-export const BOSS_RUSH_ORDER: BossId[] = [
-  "goblin_king",
-  "dark_wizard",
-  "ancient_dragon",
-  "lich_lord",
-  "demon_lord",
+export const BOSS_ORDER: BossId[] = [
+  "goblin_king", "dark_wizard", "ancient_dragon", "lich_lord", "demon_lord",
 ];
+
+// ═══════════════════════════════════════════════════════
+//  Factory — create a boss character
+// ═══════════════════════════════════════════════════════
+
+export function createBoss(
+  id: BossId,
+  position: { x: number; y: number } = { x: 0, y: 0 },
+  team: string = "boss",
+): Character {
+  const profile = BOSS_MAP.get(id);
+  if (!profile) throw new Error("Unknown boss: " + id);
+
+  const ab = profile.abilities;
+
+  const stats: Stats = {
+    maxHp: profile.hp,
+    hp: profile.hp,
+    str: ab.str, dex: ab.dex, con: ab.con,
+    int: ab.int, wis: ab.wis, cha: ab.cha,
+    ac: profile.ac,
+    proficiencyBonus: PROF_BONUS,
+    speed: profile.speed,
+  };
+
+  const spells: Spell[] = profile.spells.map(sid => {
+    const base = ALL_SPELLS[sid];
+    if (!base) throw new Error("Unknown spell for boss: " + sid);
+    return { ...base, currentCooldown: 0 };
+  });
+
+  const spellSlots: SpellSlotGrid = {};
+  for (const [k, v] of Object.entries(profile.spellSlots)) {
+    spellSlots[Number(k)] = { total: v.total, used: 0 };
+  }
+
+  const inventory: InventoryItem[] = profile.items.map(entry => ({
+    id: entry.id,
+    name: entry.id.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+    description: "",
+    quantity: entry.qty,
+    type: entry.id === "health_potion" || entry.id === "greater_health_potion" ? "heal_hp" as const
+      : entry.id === "bomb" ? "damage" as const
+      : "heal_hp" as const,
+    potency: entry.id === "health_potion" ? 7 : entry.id === "greater_health_potion" ? 14 : 0,
+    range: entry.id === "bomb" ? 20 : 0,
+  }));
+
+  const features: ClassFeature[] = profile.features.map(f => ({
+    id: f.id,
+    name: f.id.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
+    description: "",
+    usesPerBattle: f.usesPerBattle,
+    usesRemaining: f.usesPerBattle,
+  }));
+
+  return {
+    id: profile.id,
+    name: profile.name,
+    team,
+    class: "boss",
+    level: 5 + profile.tier * 2,
+    stats,
+    statusEffects: [],
+    spells,
+    spellSlots,
+    inventory,
+    weapon: profile.weapon,
+    features,
+    savingThrowProfs: ["con", "wis"],
+    isDefending: false,
+    actionHistory: [],
+    position: { ...position },
+  };
+}

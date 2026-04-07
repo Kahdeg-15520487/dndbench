@@ -350,9 +350,9 @@ export class LLMAgent implements IAgent {
               text: JSON.stringify({
                 name: me.name,
                 hp: `${me.hp}/${me.maxHp}`,
-                mp: `${me.mp}/${me.maxMp}`,
+                ac: me.ac,
+                spellSlots: me.spellSlots,
                 hpPercent: Math.round((me.hp / me.maxHp) * 100),
-                mpPercent: Math.round((me.mp / me.maxMp) * 100),
                 isDefending: me.isDefending,
                 statusEffects: me.statusEffects,
               }, null, 2),
@@ -380,7 +380,7 @@ export class LLMAgent implements IAgent {
               text: JSON.stringify({
                 name: target.name,
                 hp: `${target.hp}/${target.maxHp}`,
-                mp: `${target.mp}/${target.maxMp}`,
+                ac: target.ac,
                 hpPercent: Math.round((target.hp / target.maxHp) * 100),
                 position: `(${target.position.x.toFixed(1)}, ${target.position.y.toFixed(1)})`,
                 statusEffects: target.statusEffects,
@@ -454,8 +454,12 @@ export class LLMAgent implements IAgent {
                   description: s.description,
                   type: s.type,
                   target: s.target,
-                  mpCost: s.mpCost,
-                  basePower: s.basePower,
+                  level: s.level,
+                  range: s.range,
+                  damageDice: s.damageDice,
+                  castingAbility: s.castingAbility,
+                  attackRoll: s.attackRoll,
+                  saveAbility: s.saveAbility,
                   cooldown: s.cooldown,
                   cooldownRemaining: s.currentCooldown,
                   ready: s.currentCooldown === 0,
@@ -554,10 +558,10 @@ export class LLMAgent implements IAgent {
       {
         name: "use_item",
         label: "Use Item",
-        description: "Use an item from inventory (health_potion, mana_potion, bomb, antidote, elixir). Bombs have range 6 and need a target name. Optionally move first.",
+        description: "Use an item from inventory (health_potion, greater_health_potion, bomb, antidote, elixir). Bombs have range 20ft and need a target name. Optionally move first.",
         promptSnippet: "Use an item from inventory",
         parameters: Type.Object({
-          item_id: Type.String({ description: "Item ID to use (e.g. health_potion, mana_potion, bomb)" }),
+          item_id: Type.String({ description: "Item ID to use (e.g. health_potion, greater_health_potion, bomb)" }),
           target: Type.Optional(Type.String({ description: "Target name for bombs (e.g. 'Alpha'). Omit for self-use items like potions." })),
           move_dx: Type.Optional(Type.Number({ description: "Move this much in X before using item" })),
           move_dy: Type.Optional(Type.Number({ description: "Move this much in Y before using item" })),
@@ -719,7 +723,7 @@ ${this.config.systemPrompt || ""}`;
       : "";
 
     return `Turn ${snapshot.turnNumber}.
-Your HP: ${me.hp}/${me.maxHp} (${Math.round((me.hp / me.maxHp) * 100)}%) | MP: ${me.mp}/${me.maxMp} | Status: ${myStatus}${me.hp < me.maxHp * 0.3 ? " ⚠️ CRITICAL!" : ""}
+Your HP: ${me.hp}/${me.maxHp} (${Math.round((me.hp / me.maxHp) * 100)}%) | AC: ${me.ac} | Status: ${myStatus}${me.hp < me.maxHp * 0.3 ? " ⚠️ CRITICAL!" : ""}
 Position: you(${me.position.x.toFixed(1)},${me.position.y.toFixed(1)})
 ${otherLines.length > 0 ? otherLines.join("\n") : "No other combatants."}
 Observe then act NOW.${lastResult}`;

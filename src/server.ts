@@ -15,7 +15,7 @@ import { fileURLToPath } from "url";
 import fs from "fs";
 
 import { createCharacter } from "./engine/characters.js";
-import { createBoss, getBossProfile, getAllBossProfiles, BOSS_RUSH_ORDER } from "./engine/bosses.js";
+import { createBoss, getBossProfile, getAllBosses, BOSS_ORDER } from "./engine/bosses.js";
 import { IAgent, HeuristicAgent, LLMAgent, HumanAgent, BossAgent } from "./agent/index.js";
 import type { Character, CharacterClass, CombatAction, BossId } from "./engine/types.js";
 import { BattleRunner } from "./arena/battle-runner.js";
@@ -123,7 +123,7 @@ app.get("/api/battle-logs", async (_req, res) => {
 // ── REST API: Boss Profiles ─────────────────────────────
 
 app.get("/api/bosses", (_req, res) => {
-  const profiles = getAllBossProfiles();
+  const profiles = getAllBosses();
   res.json(profiles.map(p => ({
     id: p.id,
     name: p.name,
@@ -132,12 +132,11 @@ app.get("/api/bosses", (_req, res) => {
     tier: p.tier,
     description: p.description,
     stats: {
-      hp: p.stats.maxHp,
-      mp: p.stats.maxMp,
-      str: p.stats.strength,
-      def: p.stats.defense,
-      mag: p.stats.magic,
-      spd: p.stats.speed,
+      hp: p.hp,
+      ac: p.ac,
+      str: p.abilities.str,
+      dex: p.abilities.dex,
+      spd: p.speed,
     },
   })));
 });
@@ -312,8 +311,8 @@ class GameSession {
 
     // Send the exam plan to the client
     this.send("boss_exam_start", {
-      bosses: BOSS_RUSH_ORDER.map((id) => {
-        const p = getBossProfile(id);
+      bosses: BOSS_ORDER.map((id) => {
+        const p = getBossProfile(id)!;
         return { id: p.id, name: p.name, emoji: p.emoji, title: p.title };
       }),
     });
@@ -323,14 +322,14 @@ class GameSession {
   }
 
   private async runNextBossExam() {
-    if (this.bossExamIndex >= BOSS_RUSH_ORDER.length) {
+    if (this.bossExamIndex >= BOSS_ORDER.length) {
       // All done — send scorecard
       this.sendBossExamResults();
       return;
     }
 
-    const bossId = BOSS_RUSH_ORDER[this.bossExamIndex];
-    const bossProfile = getBossProfile(bossId);
+    const bossId = BOSS_ORDER[this.bossExamIndex];
+    const bossProfile = getBossProfile(bossId)!;
     const config = this.bossExamConfig!;
 
     // Fresh character each fight
@@ -343,7 +342,7 @@ class GameSession {
       bossName: bossProfile.name,
       bossEmoji: bossProfile.emoji,
       bossTitle: bossProfile.title,
-      totalBosses: BOSS_RUSH_ORDER.length,
+      totalBosses: BOSS_ORDER.length,
     });
 
     this.humanAgents.clear();
@@ -383,7 +382,7 @@ class GameSession {
       bossName: bossProfile.name,
       won,
       turns: log.totalTurns,
-      totalBosses: BOSS_RUSH_ORDER.length,
+      totalBosses: BOSS_ORDER.length,
     });
 
     // Save replay
@@ -396,13 +395,13 @@ class GameSession {
     this.sendBossExamResults();
 
     // Auto-advance to next boss after a short delay
-    if (this.bossExamIndex < BOSS_RUSH_ORDER.length) {
+    if (this.bossExamIndex < BOSS_ORDER.length) {
       setTimeout(() => this.runNextBossExam(), 2000);
     }
   }
 
   private sendBossExamResults() {
-    const total = BOSS_RUSH_ORDER.length;
+    const total = BOSS_ORDER.length;
     const completed = this.bossExamResults.length;
     const wins = this.bossExamResults.filter((r) => r.won).length;
     const allDone = completed >= total;

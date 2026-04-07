@@ -41,6 +41,7 @@ import {
   ARENA_DEFAULT,
   defaultStartPositions,
   generateStartPositions,
+  DiceRoller,
 } from "../engine/index.js";
 import { IAgent } from "../agent/interface.js";
 import { LLMAgent } from "../agent/llm-agent.js";
@@ -86,6 +87,7 @@ export class BattleRunner {
   private arena: ArenaConfig;
   private winCondition: WinCondition;
   private log: BattleLog;
+  private dice: DiceRoller;
   private turnNumber = 0;
   private finished = false;
   private winner?: string;         // winning character id
@@ -102,11 +104,14 @@ export class BattleRunner {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.arena = this.config.arena ?? ARENA_DEFAULT;
     this.winCondition = this.config.winCondition ?? "last_team_standing";
+    const diceSeed = Math.floor(Math.random() * 2147483647);
+    this.dice = new DiceRoller(diceSeed);
     this.log = {
       turns: [],
       totalTurns: 0,
       startTime: new Date().toISOString(),
       arena: this.arena,
+      diceSeed,
     };
 
     // Set starting positions for any character that hasn't been placed
@@ -195,7 +200,7 @@ export class BattleRunner {
   private async executeTurn(): Promise<void> {
     this.turnNumber++;
     const living = this.getLiving();
-    const order = determineTurnOrder(living);
+    const order = determineTurnOrder(living, this.dice);
 
     for (const character of order) {
       if (this.finished) break;
@@ -214,12 +219,12 @@ export class BattleRunner {
         this.arena,
       );
 
-      // Check if frozen
-      if (character.statusEffects.some((e) => e.type === "freeze")) {
+      // Check if frozen or paralyzed
+      if (character.statusEffects.some((e) => e.type === "freeze" || e.type === "paralyzed")) {
         const frozenResult: CombatResult = {
           action: { type: "wait", actorId: character.id },
           actorId: character.id,
-          narrative: `❄️ ${character.name} is frozen and cannot act!`,
+          narrative: `❄️ ${character.name} is frozen/paralyzed and cannot act!`,
         };
         // Pick any living non-ally for event targetId
         const anyEnemy = this.findEnemy(character);
@@ -261,14 +266,14 @@ export class BattleRunner {
       const spell = action.type === "cast_spell"
         ? character.spells.find(s => s.id === action.spellId)
         : null;
-      const resolveTarget = (spell?.target === "self" || action.type === "defend" || action.type === "wait")
+      const actionTarget = (spell?.target === "self" || action.type === "defend" || action.type === "wait")
         ? character
         : target;
 
-      const result = resolveAction(character, resolveTarget, action);
+      const result = resolveAction(character, actionTarget, action, this.dice, this.arena);
 
       // Attach move result
-      result.move = moveResult;
+      if (moveResult) result.move = moveResult;
 
       this.emit({ type: "action_result", actorId: character.id, targetId: target.id, result });
 

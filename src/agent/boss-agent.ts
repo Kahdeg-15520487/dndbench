@@ -1,5 +1,6 @@
 // ─────────────────────────────────────────────────────────
-//  Boss Agent — phase-based AI with boss-specific tactics
+//  Boss Agent — phase-based AI for D&D 5e boss monsters
+//  Uses spell slots, attack rolls, and class abilities.
 //  Supports multi-enemy battles (raid encounters).
 // ─────────────────────────────────────────────────────────
 
@@ -11,13 +12,14 @@ import {
   BossId,
   distance,
   moveToward,
+  totalRemainingSlots,
 } from "../engine/types.js";
 import { MELEE_RANGE } from "../engine/combat.js";
 
 type Phase = "normal" | "enraged" | "desperate";
 
 export class BossAgent implements IAgent {
-  readonly type = "heuristic" as const; // uses heuristic type for rendering
+  readonly type = "heuristic" as const;
 
   private bossId: BossId;
 
@@ -32,20 +34,17 @@ export class BossAgent implements IAgent {
   onBattleStart(): void {}
 
   async getAction(snapshot: BattleStateSnapshot): Promise<CombatAction> {
-    const me = snapshot.characters.find((c) => c.id === this.id)!;
-    const enemies = snapshot.characters.filter((c) => c.team !== me.team);
+    const me = snapshot.characters.find(c => c.id === this.id)!;
+    const enemies = snapshot.characters.filter(c => c.team !== me.team);
 
-    if (enemies.length === 0) {
-      return { type: "wait", actorId: this.id };
-    }
+    if (enemies.length === 0) return { type: "wait", actorId: this.id };
 
     const hpPct = me.hp / me.maxHp;
     const phase: Phase = hpPct > 0.5 ? "normal" : hpPct > 0.25 ? "enraged" : "desperate";
-
-    // Pick primary target (weakest enemy by HP%)
     const target = this.pickTarget(me, enemies);
     const dist = distance(me.position, target.position);
-    const maxMove = 1.0 + 10 * 0.15;
+    const maxMove = me.speed || 30;
+    const slots = totalRemainingSlots(me.spellSlots);
 
     const withMove = (action: CombatAction, requiredRange: number): CombatAction => {
       if (dist > requiredRange) {
@@ -55,68 +54,50 @@ export class BossAgent implements IAgent {
       return action;
     };
 
-    // Store helpers for boss-specific AI
-    this._dist = dist;
-    this._maxMove = maxMove;
-    this._me = me;
-    this._enemy = target;
-    this._enemies = enemies;
-    this._withMove = withMove;
+    // Store context for helper methods
+    this._ctx = { me, target, enemies, dist, maxMove, withMove, slots, phase };
 
-    // ── Desperate (<25% HP) — survive at all costs ─────────
+    // ── Desperate (<25% HP) ──
     if (phase === "desperate") {
-      const elixir = me.inventory.find((i) => i.id === "elixir" && i.quantity > 0);
+      const elixir = me.inventory.find(i => i.id === "elixir" && i.quantity > 0);
       if (elixir) return { type: "use_item", actorId: this.id, itemId: "elixir" };
 
-      const healSpell = me.spells.find(
-        (s) => s.id === "heal" && s.currentCooldown === 0 && me.mp >= s.mpCost
-      );
-      if (healSpell) return { type: "cast_spell", actorId: this.id, targetId: this.id, spellId: "heal" };
+      const gPot = me.inventory.find(i => i.id === "greater_health_potion" && i.quantity > 0);
+      if (gPot) return { type: "use_item", actorId: this.id, itemId: "greater_health_potion" };
 
-      const potion = me.inventory.find((i) => i.id === "health_potion" && i.quantity > 0);
-      if (potion) return { type: "use_item", actorId: this.id, itemId: "health_potion" };
+      const pot = me.inventory.find(i => i.id === "health_potion" && i.quantity > 0);
+      if (pot) return { type: "use_item", actorId: this.id, itemId: "health_potion" };
 
-      const shieldSpell = me.spells.find(
-        (s) => s.id === "shield" && s.currentCooldown === 0 && me.mp >= s.mpCost
-          && !me.statusEffects.some((e) => e.type === "shield")
-      );
-      if (shieldSpell) return { type: "cast_spell", actorId: this.id, targetId: this.id, spellId: "shield" };
+      const shieldSpell = this.readySpell(me, "shield");
+      if (shieldSpell && !me.statusEffects.some(e => e.type === "shield")) {
+        return { type: "cast_spell", actorId: this.id, targetId: this.id, spellId: "shield" };
+      }
 
-      const drainSpell = me.spells.find(
-        (s) => s.id === "drain" && s.currentCooldown === 0 && me.mp >= s.mpCost
-      );
-      if (drainSpell) return this.cast("drain", target.id);
+      // Use second_wind if available
+      const sw = me.features.find(f => f.id === "second_wind" && f.usesRemaining > 0);
+      if (sw) return { type: "class_ability", actorId: this.id, abilityId: "second_wind" };
 
       return { type: "defend", actorId: this.id };
     }
 
-    // ── Boss-specific tactics (normal + enraged) ───────────
+    // ── Boss-specific AI ──
     switch (this.bossId) {
-      case "goblin_king":
-        return this.goblinKingAI(me, target, enemies, phase);
-      case "dark_wizard":
-        return this.darkWizardAI(me, target, enemies, phase);
-      case "ancient_dragon":
-        return this.ancientDragonAI(me, target, enemies, phase);
-      case "lich_lord":
-        return this.lichLordAI(me, target, enemies, phase);
-      case "demon_lord":
-        return this.demonLordAI(me, target, enemies, phase);
+      case "goblin_king": return this.goblinKingAI();
+      case "dark_wizard": return this.darkWizardAI();
+      case "ancient_dragon": return this.ancientDragonAI();
+      case "lich_lord": return this.lichLordAI();
+      case "demon_lord": return this.demonLordAI();
     }
   }
 
-  // ── Target Selection ────────────────────────────────
+  // ── Target Selection ──
 
-  /** Focus-fire weakest, occasionally swap to nearest */
   private pickTarget(
     me: BattleStateSnapshot["characters"][0],
     enemies: BattleStateSnapshot["characters"],
   ): BattleStateSnapshot["characters"][0] {
-    // Sort by HP% ascending
     const sorted = [...enemies].sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp));
-    // 60% focus weakest, 40% nearest
     if (Math.random() < 0.6) return sorted[0];
-    // Nearest enemy
     let nearest = enemies[0];
     let nearestDist = Infinity;
     for (const e of enemies) {
@@ -126,177 +107,173 @@ export class BossAgent implements IAgent {
     return nearest;
   }
 
-  // ── Goblin King: brute force + poison + bombs ──────────
+  // ── Goblin King: melee + bombs ──
 
-  private goblinKingAI(me: BattleStateSnapshot["characters"][0], target: BattleStateSnapshot["characters"][0], _enemies: BattleStateSnapshot["characters"], phase: Phase): CombatAction {
-    if (phase === "enraged") {
-      const bomb = me.inventory.find((i) => i.id === "bomb" && i.quantity > 0);
-      if (bomb && Math.random() > 0.3) return this._withMove({ type: "use_item", actorId: this.id, targetId: target.id, itemId: "bomb" }, 6);
+  private goblinKingAI(): CombatAction {
+    const { me, target, withMove } = this._ctx;
+
+    const bomb = me.inventory.find(i => i.id === "bomb" && i.quantity > 0);
+    if (bomb && Math.random() > 0.5) {
+      return withMove({ type: "use_item", actorId: this.id, targetId: target.id, itemId: "bomb" }, 20);
     }
 
-    const poisonSpell = this.readySpell(me, "poison");
-    const targetNotPoisoned = !target.statusEffects.some((e) => e.type === "poison");
-    if (poisonSpell && targetNotPoisoned) return this.cast(poisonSpell.id, target.id);
+    const sw = me.features.find(f => f.id === "second_wind" && f.usesRemaining > 0);
+    if (sw && me.hp < me.maxHp * 0.4) {
+      return { type: "class_ability", actorId: this.id, abilityId: "second_wind" };
+    }
 
-    const fire = this.readySpell(me, "fire");
-    if (fire && me.mp >= fire.mpCost + 5) return this.cast(fire.id, target.id);
-
-    const bomb = me.inventory.find((i) => i.id === "bomb" && i.quantity > 0);
-    if (bomb && Math.random() > 0.6) return this._withMove({ type: "use_item", actorId: this.id, targetId: target.id, itemId: "bomb" }, 6);
-
-    return this.attackEnemy();
+    return withMove({ type: "attack", actorId: this.id, targetId: target.id }, MELEE_RANGE);
   }
 
-  // ── Dark Wizard: cast strongest spell available ────────
+  // ── Dark Wizard: spell-heavy, cast biggest available ──
 
-  private darkWizardAI(me: BattleStateSnapshot["characters"][0], target: BattleStateSnapshot["characters"][0], _enemies: BattleStateSnapshot["characters"], phase: Phase): CombatAction {
-    if (me.mp < 20) {
-      const manaPot = me.inventory.find((i) => i.id === "mana_potion" && i.quantity > 0);
-      if (manaPot) return { type: "use_item", actorId: this.id, itemId: "mana_potion" };
+  private darkWizardAI(): CombatAction {
+    const { me, target, withMove, slots } = this._ctx;
+
+    // Arcane Recovery if out of slots
+    const ar = me.features.find(f => f.id === "arcane_recovery" && f.usesRemaining > 0);
+    if (ar && slots === 0) {
+      return { type: "class_ability", actorId: this.id, abilityId: "arcane_recovery" };
     }
 
-    if (phase === "enraged") {
-      const meteor = this.readySpell(me, "meteor");
-      if (meteor) return this.cast(meteor.id, target.id);
+    // Cast biggest damage spell
+    const dmgSpells = me.spells
+      .filter(s => s.type === "damage" && s.currentCooldown === 0 && s.level > 0)
+      .sort((a, b) => b.level - a.level);
+
+    if (dmgSpells.length > 0 && slots > 0) {
+      const spell = dmgSpells[0];
+      return withMove({
+        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: spell.id as any,
+      }, spell.range);
     }
 
-    const spellPriority: string[] = ["meteor", "lightning", "drain", "ice", "fire", "poison"];
-    for (const sid of spellPriority) {
-      const spell = this.readySpell(me, sid);
-      if (spell) return this.cast(spell.id, target.id);
+    // Fall back to cantrip
+    const cantrip = me.spells.find(s => s.level === 0 && s.currentCooldown === 0);
+    if (cantrip) {
+      return withMove({
+        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: cantrip.id as any,
+      }, cantrip.range);
     }
 
-    if (me.hp < me.maxHp * 0.6) {
-      const drain = this.readySpell(me, "drain");
-      if (drain) return this.cast(drain.id, target.id);
-    }
-
-    return this.attackEnemy();
+    return withMove({ type: "attack", actorId: this.id, targetId: target.id }, MELEE_RANGE);
   }
 
-  // ── Ancient Dragon: alternating fire/physical + shield ─
+  // ── Ancient Dragon: melee monster with fire ──
 
-  private ancientDragonAI(me: BattleStateSnapshot["characters"][0], target: BattleStateSnapshot["characters"][0], _enemies: BattleStateSnapshot["characters"], phase: Phase): CombatAction {
-    if (phase === "enraged" && !me.statusEffects.some((e) => e.type === "shield")) {
-      const shield = this.readySpell(me, "shield");
-      if (shield && Math.random() > 0.5) return this.cast(shield.id, this.id);
+  private ancientDragonAI(): CombatAction {
+    const { me, target, withMove, phase } = this._ctx;
+
+    // Action Surge in enraged phase
+    const as = me.features.find(f => f.id === "action_surge" && f.usesRemaining > 0);
+    if (as && phase === "enraged" && Math.random() > 0.5) {
+      return { type: "class_ability", actorId: this.id, abilityId: "action_surge" };
     }
 
-    const meteor = this.readySpell(me, "meteor");
-    if (meteor && Math.random() > 0.4) return this.cast(meteor.id, target.id);
-
-    const fire = this.readySpell(me, "fire");
-    const lightning = this.readySpell(me, "lightning");
-
-    if (fire && lightning) {
-      return this.cast(Math.random() > 0.5 ? fire.id : lightning.id, target.id);
-    }
-    if (fire) return this.cast(fire.id, target.id);
-    if (lightning) return this.cast(lightning.id, target.id);
-
-    return this.attackEnemy();
+    return withMove({ type: "attack", actorId: this.id, targetId: target.id }, MELEE_RANGE);
   }
 
-  // ── Lich Lord: heal, drain, debuff, nuke ──────────────
+  // ── Lich Lord: spellcaster with healing ──
 
-  private lichLordAI(me: BattleStateSnapshot["characters"][0], target: BattleStateSnapshot["characters"][0], _enemies: BattleStateSnapshot["characters"], phase: Phase): CombatAction {
-    if (me.hp < me.maxHp * 0.6) {
-      const heal = this.readySpell(me, "heal");
-      if (heal) return this.cast(heal.id, this.id);
+  private lichLordAI(): CombatAction {
+    const { me, target, withMove, slots, phase } = this._ctx;
 
-      const potion = me.inventory.find((i) => i.id === "health_potion" && i.quantity > 0);
+    // Heal if needed
+    if (me.hp < me.maxHp * 0.5) {
+      const potion = me.inventory.find(i => i.id === "health_potion" && i.quantity > 0);
       if (potion) return { type: "use_item", actorId: this.id, itemId: "health_potion" };
     }
 
-    const poison = this.readySpell(me, "poison");
-    if (poison && !target.statusEffects.some((e) => e.type === "poison")) {
-      return this.cast(poison.id, target.id);
+    // Arcane Recovery if low on slots
+    const ar = me.features.find(f => f.id === "arcane_recovery" && f.usesRemaining > 0);
+    if (ar && slots <= 2) {
+      return { type: "class_ability", actorId: this.id, abilityId: "arcane_recovery" };
     }
 
-    if (me.mp < 25) {
-      const manaPot = me.inventory.find((i) => i.id === "mana_potion" && i.quantity > 0);
-      if (manaPot) return { type: "use_item", actorId: this.id, itemId: "mana_potion" };
+    // Hold Person on enemies
+    const holdPerson = this.readySpell(me, "hold_person");
+    if (holdPerson && Math.random() > 0.6) {
+      return withMove({
+        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: "hold_person",
+      }, holdPerson.range);
     }
 
-    if (phase === "enraged") {
-      const drain = this.readySpell(me, "drain");
-      if (drain && me.hp < me.maxHp * 0.7) return this.cast(drain.id, target.id);
+    // Cast biggest damage spell
+    const dmgSpells = me.spells
+      .filter(s => s.type === "damage" && s.currentCooldown === 0 && s.level > 0)
+      .sort((a, b) => b.level - a.level);
 
-      const meteor = this.readySpell(me, "meteor");
-      if (meteor) return this.cast(meteor.id, target.id);
+    if (dmgSpells.length > 0 && slots > 0) {
+      const spell = dmgSpells[0];
+      return withMove({
+        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: spell.id as any,
+      }, spell.range);
     }
 
-    const spellPriority: string[] = ["meteor", "lightning", "ice", "drain", "fire"];
-    for (const sid of spellPriority) {
-      const spell = this.readySpell(me, sid);
-      if (spell) return this.cast(spell.id, target.id);
+    // Cantrip fallback
+    const cantrip = me.spells.find(s => s.level === 0 && s.currentCooldown === 0);
+    if (cantrip) {
+      return withMove({
+        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: cantrip.id as any,
+      }, cantrip.range);
     }
 
-    return this.attackEnemy();
+    return withMove({ type: "attack", actorId: this.id, targetId: target.id }, MELEE_RANGE);
   }
 
-  // ── Demon Lord: adaptive strategy ─────────────────────
+  // ── Demon Lord: physical powerhouse with spells ──
 
-  private demonLordAI(me: BattleStateSnapshot["characters"][0], target: BattleStateSnapshot["characters"][0], _enemies: BattleStateSnapshot["characters"], phase: Phase): CombatAction {
-    if (phase === "enraged" && !me.statusEffects.some((e) => e.type === "shield")) {
-      const shield = this.readySpell(me, "shield");
-      if (shield && Math.random() > 0.6) return this.cast(shield.id, this.id);
+  private demonLordAI(): CombatAction {
+    const { me, target, withMove, slots, phase } = this._ctx;
+
+    // Action Surge
+    const as = me.features.find(f => f.id === "action_surge" && f.usesRemaining > 0);
+    if (as && phase === "enraged") {
+      return { type: "class_ability", actorId: this.id, abilityId: "action_surge" };
     }
 
-    const poison = this.readySpell(me, "poison");
-    if (poison && !target.statusEffects.some((e) => e.type === "poison") && Math.random() > 0.4) {
-      return this.cast(poison.id, target.id);
+    // Shield if taking damage
+    const shieldSpell = this.readySpell(me, "shield");
+    if (shieldSpell && !me.statusEffects.some(e => e.type === "shield") && Math.random() > 0.7) {
+      return { type: "cast_spell", actorId: this.id, targetId: this.id, spellId: "shield" };
     }
 
-    if (me.hp < me.maxHp * 0.65) {
-      const drain = this.readySpell(me, "drain");
-      if (drain) return this.cast(drain.id, target.id);
+    // Fireball if available and enraged
+    const fireball = this.readySpell(me, "fireball");
+    if (fireball && slots > 0 && phase === "enraged") {
+      return withMove({
+        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: "fireball",
+      }, fireball.range);
     }
 
-    const meteor = this.readySpell(me, "meteor");
-    if (meteor && Math.random() > 0.3) return this.cast(meteor.id, target.id);
+    // Second Wind for healing
+    const sw = me.features.find(f => f.id === "second_wind" && f.usesRemaining > 0);
+    if (sw && me.hp < me.maxHp * 0.5) {
+      return { type: "class_ability", actorId: this.id, abilityId: "second_wind" };
+    }
 
-    const lightning = this.readySpell(me, "lightning");
-    if (lightning) return this.cast(lightning.id, target.id);
-
-    const fire = this.readySpell(me, "fire");
-    if (fire) return this.cast(fire.id, target.id);
-
-    const ice = this.readySpell(me, "ice");
-    if (ice && Math.random() > 0.5) return this.cast(ice.id, target.id);
-
-    return this.attackEnemy();
+    return withMove({ type: "attack", actorId: this.id, targetId: target.id }, MELEE_RANGE);
   }
 
-  // ── Helpers ──────────────────────────────────────────
+  // ── Helpers ──
 
-  private _dist = 0;
-  private _maxMove = 0;
-  private _me!: BattleStateSnapshot["characters"][0];
-  private _enemy!: BattleStateSnapshot["characters"][0];
-  private _enemies: BattleStateSnapshot["characters"] = [];
-  private _withMove: ((action: CombatAction, requiredRange: number) => CombatAction) = (a) => a;
+  private _ctx: {
+    me: BattleStateSnapshot["characters"][0];
+    target: BattleStateSnapshot["characters"][0];
+    enemies: BattleStateSnapshot["characters"];
+    dist: number;
+    maxMove: number;
+    withMove: (action: CombatAction, requiredRange: number) => CombatAction;
+    slots: number;
+    phase: Phase;
+  } = {
+    me: null as any, target: null as any, enemies: [],
+    dist: 0, maxMove: 30,
+    withMove: (a) => a, slots: 0, phase: "normal",
+  };
 
   private readySpell(me: BattleStateSnapshot["characters"][0], spellId: string) {
-    return me.spells.find(
-      (s) => s.id === spellId && s.currentCooldown === 0 && me.mp >= s.mpCost
-    ) || undefined;
-  }
-
-  private cast(spellId: string, targetId: string): CombatAction {
-    const spell = this._me.spells.find(s => s.id === spellId);
-    const range = spell?.range ?? MELEE_RANGE;
-    return this._withMove(
-      { type: "cast_spell", actorId: this.id, targetId, spellId },
-      spell?.target === "self" ? 0 : range,
-    );
-  }
-
-  private attackEnemy(): CombatAction {
-    return this._withMove(
-      { type: "attack", actorId: this.id, targetId: this._enemy.id },
-      MELEE_RANGE,
-    );
+    return me.spells.find(s => s.id === spellId && s.currentCooldown === 0) || undefined;
   }
 
   onActionResult(_result: CombatResult): void {}

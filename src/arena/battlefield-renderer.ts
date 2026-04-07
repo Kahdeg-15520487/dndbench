@@ -21,8 +21,7 @@ export interface BattlefieldCharacter {
   team: string;
   hp: number;
   maxHp: number;
-  mp: number;
-  maxMp: number;
+  ac: number;
   position: Position;
   statusEffects: string[];
   isDefending: boolean;

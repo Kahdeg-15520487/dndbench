@@ -90,8 +90,8 @@ function renderMarkdown(
   lines.push(`| **Team** | ${characters.map((c) => c.team).join(" | ")} |`);
   lines.push(`| **Agent** | ${characters.map((c) => agentLabel(ag.find((a) => a.id === c.id))).join(" | ")} |`);
   lines.push(`| **HP** | ${characters.map((c) => `${c.stats.maxHp}`).join(" | ")} |`);
-  lines.push(`| **MP** | ${characters.map((c) => `${c.stats.maxMp}`).join(" | ")} |`);
-  lines.push(`| **STR/DEF/MAG/SPD/LCK** | ${characters.map((c) => `${c.stats.strength}/${c.stats.defense}/${c.stats.magic}/${c.stats.speed}/${c.stats.luck}`).join(" | ")} |`);
+  lines.push(`| **AC** | ${characters.map((c) => `${c.stats.ac}`).join(" | ")} |`);
+  lines.push(`| **STR/DEX/CON/INT/WIS/CHA** | ${characters.map((c) => `${c.stats.str}/${c.stats.dex}/${c.stats.con}/${c.stats.int}/${c.stats.wis}/${c.stats.cha}`).join(" | ")} |`);
   lines.push("");
   lines.push(`- **Winner**: ${winner}`);
   lines.push(`- **Turns**: ${log.totalTurns}`);
@@ -145,7 +145,7 @@ function renderMarkdown(
         lines.push(`- **Healed**: ${result.heal.amount} HP (${result.heal.targetHp}/${result.heal.targetMaxHp})`);
       }
       if (result.spell) {
-        lines.push(`- **MP remaining**: ${result.spell.mpRemaining}`);
+        lines.push(`- **Spell slot**: level ${result.spell.slotUsed}${result.spell.slotsRemaining ? `, remaining: ${JSON.stringify(result.spell.slotsRemaining)}` : ""}`);
         if (result.spell.cooldownRemaining > 0) {
           lines.push(`- **Cooldown**: ${result.spell.cooldownRemaining} turns`);
         }
@@ -161,17 +161,17 @@ function renderMarkdown(
       const snap = turn.stateSnapshot;
       if (snap) {
         lines.push("");
-        lines.push("| Name | HP | MP | Position | Status |");
+        lines.push("| Name | HP | AC | Position | Status |");
         lines.push("|------|-----|-----|----------|--------|");
         for (const c of snap.characters) {
           const bar = hpBar(c.hp, c.maxHp);
           const hp = `${bar} ${c.hp}/${c.maxHp}`;
-          const mp = `${c.mp}/${c.maxMp}`;
+          const ac = `${c.ac}`;
           const pos = `(${c.position.x.toFixed(1)},${c.position.y.toFixed(1)})`;
           const status = c.statusEffects.length > 0
             ? c.statusEffects.map((e: any) => typeof e === "string" ? e : e.type).join(", ")
             : "";
-          lines.push(`| **${c.name}** | ${hp} | ${mp} | ${pos} | ${status} |`);
+          lines.push(`| **${c.name}** | ${hp} | ${ac} | ${pos} | ${status} |`);
         }
       }
 
@@ -234,7 +234,7 @@ function renderMarkdown(
     for (const c of lastSnap.characters) {
       const isWinner = log.winner === c.id || (c.team && log.winner === c.team);
       lines.push(`### ${c.name}${isWinner ? " 🏆" : ""}`);
-      lines.push(`- HP: ${c.hp}/${c.maxHp}  MP: ${c.mp}/${c.maxMp}  Team: ${c.team}`);
+      lines.push(`- HP: ${c.hp}/${c.maxHp}  AC: ${c.ac}  Team: ${c.team}`);
       if (c.statusEffects.length > 0) {
         lines.push(`- Status: ${c.statusEffects.map((e) => `${e.type} (${e.turnsRemaining}t)`).join(", ")}`);
       }
@@ -330,8 +330,8 @@ function generateBattlefieldImages(
         team: c.team,
         hp: c.hp,
         maxHp: c.maxHp,
-        mp: c.mp,
-        maxMp: c.maxMp,
+        ac: c.ac,
+        
         position: c.position,
         statusEffects: c.statusEffects.map((e) => e.type as string),
         isDefending: c.isDefending,
@@ -406,8 +406,8 @@ function generateBattlefieldGif(
       team: c.team,
       hp: c.hp,
       maxHp: c.maxHp,
-      mp: c.mp,
-      maxMp: c.maxMp,
+      ac: c.ac,
+      
       position: c.position,
       statusEffects: c.statusEffects?.map((e: any) => typeof e === "string" ? e : e.type) ?? [],
       isDefending: c.isDefending,
@@ -456,8 +456,8 @@ function generateBattlefieldGifSync(
       team: c.team,
       hp: c.hp,
       maxHp: c.maxHp,
-      mp: c.mp,
-      maxMp: c.maxMp,
+      ac: c.ac,
+      
       position: c.position,
       statusEffects: c.statusEffects?.map((e: any) => typeof e === "string" ? e : e.type) ?? [],
       isDefending: c.isDefending,
