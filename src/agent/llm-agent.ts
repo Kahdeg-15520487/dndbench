@@ -85,6 +85,8 @@ export class LLMAgent implements IAgent {
   private actionResolve: ((action: CombatAction) => void) | null = null;
   private currentSnapshot: BattleStateSnapshot | null = null;
   private enemyId = "";
+  /** True while getAction() is awaiting — gates thinking output */
+  private turnActive = false;
 
   /** Resolve a target name to a character snapshot (fuzzy: name, id, or "self") */
   private resolveTarget(nameOrId: string): BattleStateSnapshot["characters"][0] | undefined {
@@ -113,6 +115,7 @@ export class LLMAgent implements IAgent {
 
   /** Emit a thinking step to both the UI callback and internal buffer */
   private emitThinking(step: ThinkingStep): void {
+    if (!this.turnActive) return;
     this._pendingThinkingSteps.push(step);
     this.onThinking?.(step);
   }
@@ -285,6 +288,7 @@ export class LLMAgent implements IAgent {
     if (!this.session) return defaultAction;
 
     try {
+      this.turnActive = true;
       const action = await new Promise<CombatAction>(async (resolve) => {
         this.actionResolve = resolve;
 
@@ -294,13 +298,16 @@ export class LLMAgent implements IAgent {
           // Abort throws — that's fine if we already resolved
           if (this.actionResolve) {
             console.warn(`[${this.name}] Prompt error: ${err.message}`);
+            this.turnActive = false;
             resolve(defaultAction);
           }
         });
       });
 
+      this.turnActive = false;
       return action;
     } catch (err: any) {
+      this.turnActive = false;
       console.error(`[${this.name}] getAction error: ${err.message}`);
       return defaultAction;
     }
@@ -603,6 +610,9 @@ export class LLMAgent implements IAgent {
 
   /** Called by action tool execute() — resolves the turn Promise and aborts the session */
   private async commitAction(action: CombatAction) {
+    // Stop emitting thinking immediately
+    this.turnActive = false;
+
     // Resolve the Promise in getAction()
     if (this.actionResolve) {
       const resolve = this.actionResolve;
