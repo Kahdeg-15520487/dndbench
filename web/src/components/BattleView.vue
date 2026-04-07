@@ -80,6 +80,11 @@ const actionMode = ref<"main" | "spells" | "items">("main");
 
 // ── HP / MP bars ──────────────────────────────────────
 function hpPct(c: CharState) { return c.maxHp > 0 ? (c.hp / c.maxHp) * 100 : 0; }
+function formatSlots(slots: Record<string, number>): string {
+  const levels = Object.keys(slots).map(Number).sort((a, b) => a - b);
+  const ord: Record<number, string> = { 1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "5th" };
+  return levels.filter(l => slots[l] > 0).map(l => `${ord[l] || l + "th"}:${slots[l]}`).join(" ") || "—";
+}
 function hpColor(pct: number): string {
   if (pct > 60) return "var(--hp)";
   if (pct > 30) return "var(--hp-mid)";
@@ -362,6 +367,10 @@ onMounted(() => nextTick(drawBattlefield));
             <span class="bar-label" style="color: var(--ac)">AC</span>
             <span class="bar-value ac-val">{{ c.ac }}</span>
           </div>
+          <div class="bar-container" v-if="c.spellSlots">
+            <span class="bar-label" style="color: #a78bfa">Slots</span>
+            <span class="bar-value slot-val">{{ formatSlots(c.spellSlots) }}</span>
+          </div>
           <div class="status-tags" v-if="c.statusEffects.length">
             <span v-for="s in c.statusEffects" :key="s.type" class="status-tag">{{ statusEmoji[s.type] || "●" }}</span>
           </div>
@@ -388,6 +397,10 @@ onMounted(() => nextTick(drawBattlefield));
           <span class="bar-label" style="color: var(--ac)">AC</span>
           <span class="bar-value ac-val">{{ player.ac }}</span>
         </div>
+        <div class="bar-container" v-if="player.spellSlots">
+          <span class="bar-label" style="color: #a78bfa">Slots</span>
+          <span class="bar-value slot-val">{{ formatSlots(player.spellSlots) }}</span>
+        </div>
         <div class="status-tags" v-if="player.statusEffects.length">
           <span v-for="s in player.statusEffects" :key="s.type" class="status-tag">{{ statusLabel(s.type, s.turnsRemaining) }}</span>
         </div>
@@ -411,6 +424,10 @@ onMounted(() => nextTick(drawBattlefield));
         <div class="bar-container">
           <span class="bar-label" style="color: var(--ac)">AC</span>
           <span class="bar-value ac-val">{{ enemy.ac }}</span>
+        </div>
+        <div class="bar-container" v-if="enemy.spellSlots">
+          <span class="bar-label" style="color: #a78bfa">Slots</span>
+          <span class="bar-value slot-val">{{ formatSlots(enemy.spellSlots) }}</span>
         </div>
         <div class="status-tags" v-if="enemy.statusEffects.length">
           <span v-for="s in enemy.statusEffects" :key="s.type" class="status-tag">{{ statusLabel(s.type, s.turnsRemaining) }}</span>
@@ -674,6 +691,7 @@ onMounted(() => nextTick(drawBattlefield));
 .bar-fill { height: 100%; border-radius: 4px; transition: width 0.4s ease; }
 .bar-value { font-size: 10px; color: var(--text-dim); width: 55px; flex-shrink: 0; text-align: right; }
 .ac-val { color: var(--ac); font-weight: 700; font-size: 14px; }
+.slot-val { color: #a78bfa; font-size: 11px; font-weight: 600; }
 .status-tags { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; min-height: 0; }
 .status-tag {
   font-size: 9px;

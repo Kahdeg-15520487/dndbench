@@ -11,6 +11,7 @@ import {
   CombatResult,
   distance,
   moveToward,
+  remainingSlots,
   totalRemainingSlots,
 } from "../engine/types.js";
 import { MELEE_RANGE } from "../engine/combat.js";
@@ -88,12 +89,13 @@ export class HeuristicAgent implements IAgent {
       return { type: "use_item", actorId: this.id, targetId: target.id, itemId: "bomb" };
     }
 
-    // ── Cast damage spells (if we have slots) ──
+    // ── Cast damage spells (if we have slots for that level) ──
     const slots = totalRemainingSlots(me.spellSlots);
     if (slots > 0) {
-      // Prioritize highest-level damage spells
+      // Prioritize highest-level damage spells that we have slots for
       const dmgSpells = me.spells
-        .filter(s => s.type === "damage" && s.currentCooldown === 0 && s.level > 0)
+        .filter(s => s.type === "damage" && s.currentCooldown === 0 && s.level > 0
+          && remainingSlots(me.spellSlots, s.level) > 0)
         .sort((a, b) => b.level - a.level);
 
       // Cantrips are always available

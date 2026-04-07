@@ -12,6 +12,7 @@ import {
   BossId,
   distance,
   moveToward,
+  remainingSlots,
   totalRemainingSlots,
 } from "../engine/types.js";
 import { MELEE_RANGE } from "../engine/combat.js";
@@ -138,10 +139,11 @@ export class BossAgent implements IAgent {
 
     // Cast biggest damage spell
     const dmgSpells = me.spells
-      .filter(s => s.type === "damage" && s.currentCooldown === 0 && s.level > 0)
+      .filter(s => s.type === "damage" && s.currentCooldown === 0 && s.level > 0
+        && remainingSlots(me.spellSlots, s.level) > 0)
       .sort((a, b) => b.level - a.level);
 
-    if (dmgSpells.length > 0 && slots > 0) {
+    if (dmgSpells.length > 0) {
       const spell = dmgSpells[0];
       return withMove({
         type: "cast_spell", actorId: this.id, targetId: target.id, spellId: spell.id as any,
@@ -200,10 +202,11 @@ export class BossAgent implements IAgent {
 
     // Cast biggest damage spell
     const dmgSpells = me.spells
-      .filter(s => s.type === "damage" && s.currentCooldown === 0 && s.level > 0)
+      .filter(s => s.type === "damage" && s.currentCooldown === 0 && s.level > 0
+        && remainingSlots(me.spellSlots, s.level) > 0)
       .sort((a, b) => b.level - a.level);
 
-    if (dmgSpells.length > 0 && slots > 0) {
+    if (dmgSpells.length > 0) {
       const spell = dmgSpells[0];
       return withMove({
         type: "cast_spell", actorId: this.id, targetId: target.id, spellId: spell.id as any,
@@ -240,7 +243,7 @@ export class BossAgent implements IAgent {
 
     // Fireball if available and enraged
     const fireball = this.readySpell(me, "fireball");
-    if (fireball && slots > 0 && phase === "enraged") {
+    if (fireball && remainingSlots(me.spellSlots, fireball.level) > 0 && phase === "enraged") {
       return withMove({
         type: "cast_spell", actorId: this.id, targetId: target.id, spellId: "fireball",
       }, fireball.range);
@@ -273,7 +276,11 @@ export class BossAgent implements IAgent {
   };
 
   private readySpell(me: BattleStateSnapshot["characters"][0], spellId: string) {
-    return me.spells.find(s => s.id === spellId && s.currentCooldown === 0) || undefined;
+    const spell = me.spells.find(s => s.id === spellId && s.currentCooldown === 0);
+    if (!spell) return undefined;
+    // Cantrips (level 0) don't need slots
+    if (spell.level === 0) return spell;
+    return remainingSlots(me.spellSlots, spell.level) > 0 ? spell : undefined;
   }
 
   onActionResult(_result: CombatResult): void {}

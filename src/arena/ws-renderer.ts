@@ -177,5 +177,14 @@ function serializeCharacter(char: Character) {
       currentCooldown: s.currentCooldown,
     })),
     inventory: char.inventory.map((i) => ({ id: i.id, name: i.name, quantity: i.quantity })),
+    spellSlots: serializeSpellSlots(char.spellSlots),
   };
+}
+
+function serializeSpellSlots(slots: Record<number, { total: number; used: number }>): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const [level, info] of Object.entries(slots)) {
+    if (info.total > 0) result[level] = info.total - info.used;
+  }
+  return result;
 }
