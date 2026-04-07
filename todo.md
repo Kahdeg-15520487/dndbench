@@ -4,151 +4,80 @@
 
 ## Pending
 
-- [ ] **#1** **[critical]** Test LLM agent against a real provider
-- [ ] **#2** **[high]** Fix provider mapping — DB has "openai-compatible" but pi SDK needs known provider names
-- [ ] **#3** **[high]** Implement tool call API layer (actions exposed to LLM agents)
-- [ ] **#4** **[high]** Implement LLM agent controller (two agents take turns via API)
-- [ ] **#5** Create battle runner, logging, and replay system
-- [ ] **#6** Add CLI entry point and example configurations
-- [ ] **#7** Streaming enemy thinking in UI (show LLM observation chain)
+- [ ] **#25** Phase 6: Battlefield renderer — draw N units with team colors, labels
 
 ## Completed
 
-- [x] **#8** **[high]** Add BossId type to engine/types.ts
-- [x] **#9** **[high]** Create src/engine/bosses.ts — 5 boss definitions with scaling stats, spells, items
-- [x] **#10** **[high]** Create src/agent/boss-agent.ts — phase-based boss AI (normal/enraged/desperate)
-- [x] **#11** **[high]** Update server.ts — boss rush mode with multi-battle progression
-- [x] **#12** **[high]** Update web UI — game category tabs (1v1 / Boss Exam), boss exam scorecard, handle boss WS messages
-- [x] **#13** Update CLI (src/index.ts) — boss rush mode support
+- [x] **#21** **[high]** Phase 2: BattleRunner multi-unit — accept N characters/agents, team-aware defeat checks, per-turn N action resolution, turn order by speed across all units
+- [x] **#22** **[high]** Phase 3: Agent updates — HeuristicAgent targets weakest enemy, BossAgent handles multiple enemies, LLM agent sees all combatants
+- [x] **#23** Phase 4: CLI & entry point — team setup mode, --teams flag, raid boss mode, FFA mode
+- [x] **#24** Phase 5: Start positions for N units — formation presets, spread patterns for teams
+- [x] **#26** **[low]** Phase 7: Test a 2v2 and a raid battle end-to-end
 
 <!-- Raw Data -->
 ```json
 {
   "todos": [
     {
-      "id": 1,
-      "text": "Test LLM agent against a real provider",
-      "done": false,
-      "priority": "critical",
-      "tags": [],
-      "createdAt": 1774946597571,
-      "archived": false
-    },
-    {
-      "id": 2,
-      "text": "Fix provider mapping — DB has \"openai-compatible\" but pi SDK needs known provider names",
-      "done": false,
-      "priority": "high",
-      "tags": [],
-      "createdAt": 1774946604495,
-      "archived": false
-    },
-    {
-      "id": 3,
-      "text": "Implement tool call API layer (actions exposed to LLM agents)",
-      "done": false,
-      "priority": "high",
-      "tags": [],
-      "createdAt": 1774946608847,
-      "archived": false
-    },
-    {
-      "id": 4,
-      "text": "Implement LLM agent controller (two agents take turns via API)",
-      "done": false,
-      "priority": "high",
-      "tags": [],
-      "createdAt": 1774946613798,
-      "archived": false
-    },
-    {
-      "id": 5,
-      "text": "Create battle runner, logging, and replay system",
-      "done": false,
-      "priority": "medium",
-      "tags": [],
-      "createdAt": 1774946616287,
-      "archived": false
-    },
-    {
-      "id": 6,
-      "text": "Add CLI entry point and example configurations",
-      "done": false,
-      "priority": "medium",
-      "tags": [],
-      "createdAt": 1774946621062,
-      "archived": false
-    },
-    {
-      "id": 7,
-      "text": "Streaming enemy thinking in UI (show LLM observation chain)",
-      "done": false,
-      "priority": "medium",
-      "tags": [],
-      "createdAt": 1775116426915,
-      "archived": false
-    },
-    {
-      "id": 8,
-      "text": "Add BossId type to engine/types.ts",
+      "id": 21,
+      "text": "Phase 2: BattleRunner multi-unit — accept N characters/agents, team-aware defeat checks, per-turn N action resolution, turn order by speed across all units",
       "done": true,
       "priority": "high",
       "tags": [],
-      "createdAt": 1775462490337,
+      "createdAt": 1775534898304,
       "archived": false,
-      "completedAt": 1775462672401
+      "completedAt": 1775535591044
     },
     {
-      "id": 9,
-      "text": "Create src/engine/bosses.ts — 5 boss definitions with scaling stats, spells, items",
+      "id": 22,
+      "text": "Phase 3: Agent updates — HeuristicAgent targets weakest enemy, BossAgent handles multiple enemies, LLM agent sees all combatants",
       "done": true,
       "priority": "high",
       "tags": [],
-      "createdAt": 1775462499722,
+      "createdAt": 1775534904459,
       "archived": false,
-      "completedAt": 1775462679299
+      "completedAt": 1775535837893
     },
     {
-      "id": 10,
-      "text": "Create src/agent/boss-agent.ts — phase-based boss AI (normal/enraged/desperate)",
-      "done": true,
-      "priority": "high",
-      "tags": [],
-      "createdAt": 1775462506803,
-      "archived": false,
-      "completedAt": 1775462684273
-    },
-    {
-      "id": 11,
-      "text": "Update server.ts — boss rush mode with multi-battle progression",
-      "done": true,
-      "priority": "high",
-      "tags": [],
-      "createdAt": 1775462515867,
-      "archived": false,
-      "completedAt": 1775463078044
-    },
-    {
-      "id": 12,
-      "text": "Update web UI — game category tabs (1v1 / Boss Exam), boss exam scorecard, handle boss WS messages",
-      "done": true,
-      "priority": "high",
-      "tags": [],
-      "createdAt": 1775462520788,
-      "archived": false,
-      "completedAt": 1775463377138
-    },
-    {
-      "id": 13,
-      "text": "Update CLI (src/index.ts) — boss rush mode support",
+      "id": 23,
+      "text": "Phase 4: CLI & entry point — team setup mode, --teams flag, raid boss mode, FFA mode",
       "done": true,
       "priority": "medium",
       "tags": [],
-      "createdAt": 1775462526206,
+      "createdAt": 1775534918092,
       "archived": false,
-      "completedAt": 1775463712196
+      "completedAt": 1775536001255
+    },
+    {
+      "id": 24,
+      "text": "Phase 5: Start positions for N units — formation presets, spread patterns for teams",
+      "done": true,
+      "priority": "medium",
+      "tags": [],
+      "createdAt": 1775534925106,
+      "archived": false,
+      "completedAt": 1775536336436
+    },
+    {
+      "id": 25,
+      "text": "Phase 6: Battlefield renderer — draw N units with team colors, labels",
+      "done": false,
+      "priority": "medium",
+      "tags": [],
+      "createdAt": 1775534933651,
+      "archived": false
+    },
+    {
+      "id": 26,
+      "text": "Phase 7: Test a 2v2 and a raid battle end-to-end",
+      "done": true,
+      "priority": "low",
+      "tags": [],
+      "createdAt": 1775534940228,
+      "archived": false,
+      "completedAt": 1775536346327
     }
   ],
-  "nextId": 14
+  "nextId": 27
 }
 ```
