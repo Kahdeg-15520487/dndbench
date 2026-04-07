@@ -33,6 +33,14 @@ export function createCliRenderer(
         break;
       }
 
+      case "move": {
+        const name = charNames.get(event.actorId) ?? event.actorId;
+        console.log(
+          chalk.magenta(`  🏃 ${name} moves (${event.from.x.toFixed(1)},${event.from.y.toFixed(1)}) → (${event.to.x.toFixed(1)},${event.to.y.toFixed(1)}) [${event.distance.toFixed(1)} units]`)
+        );
+        break;
+      }
+
       case "action_chosen":
         printActionChosen(event.action);
         break;

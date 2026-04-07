@@ -8,6 +8,7 @@ import {
   BattleStateSnapshot,
   CombatResult,
   CombatAction,
+  ArenaConfig,
 } from "../engine/types.js";
 import {
   createSnapshot,
@@ -48,6 +49,7 @@ export function createWsRenderer(
           enemyId: enemyCharacterId,
           playerClass: event.characters.find((c) => c.id === playerCharacterId)?.class || "",
           enemyClass: event.characters.find((c) => c.id === enemyCharacterId)?.class || "boss",
+          arena: event.arena,
           characters: event.characters.map(serializeCharacter),
         });
         send("info", {
@@ -66,6 +68,15 @@ export function createWsRenderer(
         }
         break;
       }
+
+      case "move":
+        send("move", {
+          actorId: event.actorId,
+          from: event.from,
+          to: event.to,
+          distance: event.distance,
+        });
+        break;
 
       case "action_chosen": {
         const isPlayer = event.actorId === playerCharacterId;
@@ -153,11 +164,14 @@ function serializeCharacter(char: Character) {
     luck: char.stats.luck,
     statusEffects: char.statusEffects.map((e) => ({ type: e.type, turnsRemaining: e.turnsRemaining })),
     isDefending: char.isDefending,
+    position: char.position,
     spells: char.spells.map((s) => ({
       id: s.id,
       name: s.name,
       type: s.type,
       mpCost: s.mpCost,
+      basePower: s.basePower,
+      range: s.range,
       currentCooldown: s.currentCooldown,
     })),
     inventory: char.inventory.map((i) => ({ id: i.id, name: i.name, quantity: i.quantity })),
@@ -171,7 +185,8 @@ function serializeCharacter(char: Character) {
 export function buildSnapshot(
   characters: Character[],
   turnNumber: number,
-  phase: "ongoing" | "finished"
+  phase: "ongoing" | "finished",
+  arena: ArenaConfig
 ): BattleStateSnapshot {
-  return createSnapshot(characters, turnNumber, phase);
+  return createSnapshot(characters, turnNumber, phase, arena);
 }

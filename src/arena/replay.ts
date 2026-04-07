@@ -23,9 +23,20 @@ export function saveReplay(
   agents: IAgent[],
   replayDir = "replays"
 ): string {
-  const md = renderMarkdown(log, characters, agents);
   const filePath = buildPath(log, characters, agents, replayDir);
+  const imagesDir = filePath.replace(/\.md$/, "_images");
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
+
+  // Generate battlefield images — one per turn-result, keyed by "turnNum-resultIdx"
+  let imageMap = new Map<string, string>();
+  try {
+    imageMap = generateBattlefieldImages(log, characters, imagesDir);
+  } catch (err: any) {
+    // Image generation is optional — don't fail replay if canvas isn't available
+    console.error("Battlefield image generation skipped:", err.message);
+  }
+
+  const md = renderMarkdown(log, characters, agents, imageMap);
   fs.writeFileSync(filePath, md, "utf-8");
   return filePath;
 }
@@ -35,7 +46,8 @@ export function saveReplay(
 function renderMarkdown(
   log: BattleLog,
   characters: Character[],
-  agents: IAgent[]
+  agents: IAgent[],
+  imageMap: Map<string, string>
 ): string {
   const lines: string[] = [];
   const agentMap = new Map(agents.map((a) => [a.id, a]));
@@ -61,6 +73,7 @@ function renderMarkdown(
   lines.push("");
   lines.push(`- **Winner**: ${winner}`);
   lines.push(`- **Turns**: ${log.totalTurns}`);
+  lines.push(`- **Arena**: ${log.arena.label} (${log.arena.width}×${log.arena.height})`);
   lines.push(`- **Started**: ${log.startTime}`);
   lines.push(`- **Ended**: ${log.endTime ?? "N/A"}`);
   lines.push("");
@@ -71,6 +84,7 @@ function renderMarkdown(
   lines.push("## Turn-by-Turn Replay");
   lines.push("");
 
+  let resultIdx = 0;
   for (const turn of log.turns) {
     for (const result of turn.results) {
       const actor = charMap.get(result.actorId);
@@ -86,6 +100,11 @@ function renderMarkdown(
       // Action details
       const act = result.action;
       lines.push(`- **Action**: ${formatAction(act)}`);
+
+      // Movement
+      if (result.move) {
+        lines.push(`- **Move**: (${result.move.from.x.toFixed(1)},${result.move.from.y.toFixed(1)}) → (${result.move.to.x.toFixed(1)},${result.move.to.y.toFixed(1)}) [${result.move.distanceMoved.toFixed(1)} units]`);
+      }
 
       // Damage / heal details
       if (result.damage) {
@@ -113,10 +132,20 @@ function renderMarkdown(
       const snap = turn.stateSnapshot;
       if (snap) {
         const hpLine = snap.characters
-          .map((c) => `**${c.name}**: ${hpBar(c.hp, c.maxHp)} ${c.hp}/${c.maxHp} HP, ${c.mp}/${c.maxMp} MP`)
+          .map((c) => `**${c.name}**: ${hpBar(c.hp, c.maxHp)} ${c.hp}/${c.maxHp} HP, ${c.mp}/${c.maxMp} MP @ (${c.position.x.toFixed(1)},${c.position.y.toFixed(1)})`)
           .join(" | ");
         lines.push("");
         lines.push(hpLine);
+      }
+
+      // Battlefield image — inline at end of turn
+      const imgKey = `${turn.turnNumber}-${resultIdx}`;
+      const imgPath = imageMap.get(imgKey);
+      if (imgPath) {
+        const imgName = path.basename(imgPath);
+        const relPath = `./${path.basename(path.dirname(imgPath))}/${imgName}`;
+        lines.push("");
+        lines.push(`![Turn ${turn.turnNumber} — ${actorName}](${relPath})`);
       }
 
       // Thinking steps (LLM reasoning)
@@ -127,9 +156,23 @@ function renderMarkdown(
         lines.push("");
         for (const step of turn.thinkingSteps) {
           if (step.type === "tool_call") {
-            lines.push(`- **🔧 ${step.toolName}**`);
+            let detail = `**🔧 ${step.toolName}**`;
+            if (step.toolParams != null && typeof step.toolParams === "object") {
+              const entries = Object.entries(step.toolParams).filter(([_, v]) => v != null);
+              if (entries.length > 0) {
+                const paramStr = entries.map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(", ");
+                detail += `(${paramStr})`;
+              }
+            }
+            lines.push(`- ${detail}`);
           } else if (step.type === "tool_result") {
-            lines.push(`  - ↳ ${step.text}`);
+            const isAction = ["attack", "defend", "cast_spell", "use_item", "wait", "flee"].includes(step.toolName || "");
+            if (isAction) {
+              lines.push(`  - ↳ ${step.text}`);
+            } else {
+              // Observation results are now clean text from the tool
+              lines.push(`  - ↳ ${step.text}`);
+            }
           } else if (step.type === "thinking") {
             lines.push(`- 💭 ${step.text}`);
           }
@@ -139,6 +182,7 @@ function renderMarkdown(
       }
 
       lines.push("");
+      resultIdx++;
     }
   }
 
@@ -208,3 +252,70 @@ function agentLabel(agent?: IAgent): string {
   };
   return labels[agent.type] || agent.type;
 }
+
+function truncate(val: any, maxLen: number): string {
+  const str = typeof val === "string" ? val : JSON.stringify(val);
+  if (!str) return "";
+  if (str.length <= maxLen) return str;
+  return str.slice(0, maxLen - 3) + "...";
+}
+
+// ── Battlefield Image Generation ───────────────────────
+
+import {
+  renderBattlefield,
+  type BattlefieldCharacter,
+  type BattlefieldFrame,
+} from "./battlefield-renderer.js";
+
+function generateBattlefieldImages(
+  log: BattleLog,
+  characters: Character[],
+  imagesDir: string
+): Map<string, string> {
+  fs.mkdirSync(imagesDir, { recursive: true });
+
+  const imageMap = new Map<string, string>();
+  let resultIdx = 0;
+
+  for (const turn of log.turns) {
+    for (const result of turn.results) {
+      if (!turn.stateSnapshot) { resultIdx++; continue; }
+
+      const bfChars: BattlefieldCharacter[] = turn.stateSnapshot.characters.map((c) => ({
+        id: c.id,
+        name: c.name,
+        hp: c.hp,
+        maxHp: c.maxHp,
+        mp: c.mp,
+        maxMp: c.maxMp,
+        position: c.position,
+        statusEffects: c.statusEffects.map((e) => e.type as string),
+        isDefending: c.isDefending,
+      }));
+
+      const frame: BattlefieldFrame = {
+        arena: log.arena,
+        characters: bfChars,
+        moveTrail: result.move
+          ? { actorId: result.actorId, from: result.move.from, to: result.move.to }
+          : undefined,
+        turnNumber: turn.turnNumber,
+        actorId: result.actorId,
+      };
+
+      const buf = renderBattlefield(frame);
+      const imgName = `turn_${String(turn.turnNumber).padStart(3, "0")}_action${resultIdx}.png`;
+      const imgPath = path.join(imagesDir, imgName);
+      fs.writeFileSync(imgPath, buf);
+
+      const key = `${turn.turnNumber}-${resultIdx}`;
+      imageMap.set(key, imgPath);
+      resultIdx++;
+    }
+  }
+
+  return imageMap;
+}
+
+
