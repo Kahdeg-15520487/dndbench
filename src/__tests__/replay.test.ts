@@ -110,4 +110,44 @@ describe("Replay", () => {
 
     expect(path1).not.toBe(path2);
   });
+
+  it("renders thinking steps in replay", () => {
+    const w = createCharacter("unit1", "Alice", "warrior", undefined, "red");
+    const m = createCharacter("unit2", "Bob", "mage", undefined, "blue");
+    const log: BattleLog = {
+      turns: [{
+        turnNumber: 1,
+        actorId: "unit2",
+        results: [{
+          action: { type: "cast_spell", actorId: "unit2", targetId: "unit1", spellId: "fire_bolt" },
+          actorId: "unit2",
+          targetId: "unit1",
+          narrative: "Bob casts Fire Bolt at Alice for 8 damage!",
+        }],
+        stateSnapshot: {
+          characters: [
+            { id: "unit1", name: "Alice", team: "red", class: "warrior", level: 5, hp: 40, maxHp: 55, ac: 16, speed: 30, position: { x: 10, y: 30 }, statusEffects: [], spellSlots: {}, inventory: [], isDefending: false } as any,
+            { id: "unit2", name: "Bob", team: "blue", class: "mage", level: 5, hp: 24, maxHp: 24, ac: 12, speed: 30, position: { x: 90, y: 30 }, statusEffects: [], spellSlots: {}, inventory: [], isDefending: false } as any,
+          ],
+          turnNumber: 1, phase: "action" as any, arena: { width: 100, height: 100, label: "Medium" },
+        },
+        thinkingSteps: [
+          { type: "thinking", text: "I should attack the warrior" },
+          { type: "tool_call", toolName: "attack", text: "", toolParams: { target: "unit1" } },
+          { type: "tool_result", toolName: "attack", text: "Hit for 8 damage" },
+        ],
+      }],
+      totalTurns: 1,
+      startTime: "2026-01-01T00:00:00Z",
+      endTime: "2026-01-01T00:01:00Z",
+      winner: "unit2",
+      arena: { label: "Medium", width: 100, height: 100 },
+    };
+    const agents = [new HeuristicAgent("unit1", "Alice"), new HeuristicAgent("unit2", "Bob")];
+    const path = saveReplay(log, [w, m], agents, REPLAY_DIR);
+    const content = fs.readFileSync(path, "utf-8");
+    expect(content).toContain("Thinking process");
+    expect(content).toContain("🔧 attack");
+    expect(content).toContain("I should attack");
+  });
 });

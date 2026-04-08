@@ -385,6 +385,8 @@ function renderBracket() {
       html += '<div style="color:var(--dim)">No games yet</div>';
     }
     html += '</div>';
+    // Retry button (only after tournament completes)
+    html += '<button onclick="retryMatchup(' + mi + ')" style="margin-top:2px;padding:2px 8px;font-size:10px;background:var(--border);border:none;border-radius:3px;color:var(--text);cursor:pointer;opacity:0.7" onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0.7">🔄 Retry</button>';
     html += '</div>';
   });
   el.innerHTML = html;
@@ -581,6 +583,26 @@ function quickDuel() {
   document.getElementById('includeHeuristic').checked = false;
   refreshModelChips();
   startTournament();
+}
+
+async function retryMatchup(matchupIdx) {
+  if (!window._lastResult || !window._lastResult.matchups[matchupIdx]) {
+    toast('No matchup data to retry', 'error');
+    return;
+  }
+  const matchup = window._lastResult.matchups[matchupIdx];
+  try {
+    const resp = await fetch('/api/tournament/retry/' + matchupIdx, { method: 'POST' });
+    const data = await resp.json();
+    if (resp.ok) {
+      toast('Retrying ' + shortName(data.modelA) + ' vs ' + shortName(data.modelB), 'info');
+      switchTab(1); // Switch to Live tab
+    } else {
+      toast(data.error || 'Retry failed', 'error');
+    }
+  } catch (e) {
+    toast('Error: ' + e.message, 'error');
+  }
 }
 
 function applyPreset(bestOf, kFactor, maxTurns) {

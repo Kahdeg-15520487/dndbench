@@ -12,8 +12,10 @@ import {
   generateStartPositions,
   autoArenaPreset,
   getTeamColor,
+  getCoverBonus,
   defaultStartPositions,
   ARENA_PRESETS,
+  type ArenaConfig,
 } from "../engine/types.js";
 
 describe("abilityModifier", () => {
@@ -338,5 +340,56 @@ describe("getTeamColor", () => {
     const c2 = getTeamColor("custom_team_xyz");
     expect(c1).toBe(c2);
     expect(c1).toMatch(/^hsl\(/);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Cover System
+// ══════════════════════════════════════════════════════════
+
+describe("getCoverBonus", () => {
+  it("returns 0 for arena with no cover objects", () => {
+    const arena: ArenaConfig = { width: 100, height: 60, label: "Test" };
+    expect(getCoverBonus({ x: 0, y: 30 }, { x: 100, y: 30 }, arena)).toBe(0);
+  });
+
+  it("returns 0 when cover is not in line of sight", () => {
+    const arena: ArenaConfig = {
+      width: 100, height: 60, label: "Test",
+      coverObjects: [{ x: 80, y: 50, width: 5, height: 5, coverLevel: "half" }],
+    };
+    expect(getCoverBonus({ x: 0, y: 10 }, { x: 100, y: 10 }, arena)).toBe(0);
+  });
+
+  it("returns 2 for half cover between attacker and defender", () => {
+    const arena: ArenaConfig = {
+      width: 100, height: 60, label: "Test",
+      coverObjects: [{ x: 48, y: 28, width: 4, height: 4, coverLevel: "half" }],
+    };
+    expect(getCoverBonus({ x: 10, y: 30 }, { x: 90, y: 30 }, arena)).toBe(2);
+  });
+
+  it("returns 5 for three-quarters cover", () => {
+    const arena: ArenaConfig = {
+      width: 100, height: 60, label: "Test",
+      coverObjects: [{ x: 48, y: 28, width: 4, height: 4, coverLevel: "three_quarters" }],
+    };
+    expect(getCoverBonus({ x: 10, y: 30 }, { x: 90, y: 30 }, arena)).toBe(5);
+  });
+
+  it("returns highest bonus when multiple covers overlap", () => {
+    const arena: ArenaConfig = {
+      width: 100, height: 60, label: "Test",
+      coverObjects: [
+        { x: 30, y: 28, width: 4, height: 4, coverLevel: "half" },
+        { x: 60, y: 28, width: 4, height: 4, coverLevel: "three_quarters" },
+      ],
+    };
+    expect(getCoverBonus({ x: 10, y: 30 }, { x: 90, y: 30 }, arena)).toBe(5);
+  });
+
+  it("covers appear in arena presets", () => {
+    expect(ARENA_PRESETS.medium.coverObjects?.length).toBeGreaterThan(0);
+    expect(ARENA_PRESETS.large.coverObjects?.length).toBeGreaterThan(0);
   });
 });

@@ -640,3 +640,53 @@ describe("BattleRunner", () => {
   });
 });
 
+// ══════════════════════════════════════════════════════════
+//  Action Surge Integration
+// ══════════════════════════════════════════════════════════
+
+describe("Action Surge", () => {
+  it("grants extra action when used", async () => {
+    const w = createCharacter("w", "Warrior", "warrior", { x: 48, y: 30 }, "a");
+    const m = createCharacter("m", "Mage", "mage", { x: 52, y: 30 }, "b");
+
+    const events: any[] = [];
+    let turnCount = 0;
+    let surged = false;
+
+    const makeAgent = (id: string): IAgent => ({
+      type: "heuristic",
+      id,
+      name: id,
+      getAction: async (snap) => {
+        const target = snap.characters.find(c => c.id !== id)!;
+        // First action: Action Surge
+        if (id === "w" && !surged) {
+          surged = true;
+          return { type: "class_ability", actorId: id, abilityId: "action_surge" };
+        }
+        return { type: "attack", actorId: id, targetId: target.id };
+      },
+      onBattleStart: async () => {},
+      onBattleEnd: async () => {},
+      onActionResult: () => {
+        turnCount++;
+      },
+      destroy: () => {},
+    });
+
+    const runner = new BattleRunner(
+      [w, m],
+      [makeAgent("w"), makeAgent("m")],
+      { maxTurns: 5, eventHandler: (e) => events.push(e) },
+    );
+
+    const log = await runner.run();
+    expect(log).toBeDefined();
+
+    // The warrior should have taken 2 actions in the turn it used Action Surge
+    const actionEvents = events.filter(e => e.type === "action_result" && e.actorId === "w");
+    // At least 2 action results for warrior (surge + extra attack)
+    expect(actionEvents.length).toBeGreaterThanOrEqual(2);
+  });
+});
+

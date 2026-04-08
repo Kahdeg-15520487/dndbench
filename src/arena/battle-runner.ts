@@ -35,6 +35,14 @@ import {
   tickCooldowns,
   createSnapshot,
   determineTurnOrder,
+  checkOpportunityAttack,
+  resetReaction,
+  isDying,
+  isDead,
+  isStable,
+  rollDeathSave,
+  markUnconscious,
+  concentrationSaveFromDamage,
   ARENA_DEFAULT,
   defaultStartPositions,
   generateStartPositions,
@@ -52,6 +60,7 @@ export type BattleEvent =
   | { type: "action_chosen"; actorId: string; action: CombatAction }
   | { type: "action_result"; actorId: string; targetId: string; result: CombatResult }
   | { type: "status_tick"; characterId: string; narratives: string[] }
+  | { type: "death_save"; characterId: string; narrative: string }
   | { type: "health_bars"; characters: Character[] }
   | { type: "character_defeated"; characterId: string }
   | { type: "battle_end"; winner?: string; winningTeam?: string; reason: string };
@@ -121,7 +130,8 @@ export class BattleRunner {
   getCharacters(): Character[] { return this.characters; }
 
   /** Living characters only */
-  getLiving(): Character[] { return this.characters.filter(c => c.stats.hp > 0); }
+  /** Get living characters (HP > 0, not defeated) */
+  getLiving(): Character[] { return this.characters.filter(c => c.stats.hp > 0 && !this.defeatedIds.has(c.id)); }
 
   /** Agents */
   getAgents(): IAgent[] { return this.agents; }
@@ -200,18 +210,46 @@ export class BattleRunner {
    */
   private async executeTurn(): Promise<void> {
     this.turnNumber++;
+
+    // ── Roll death saves for dying characters ──
+    const dying = this.characters.filter(c => isDying(c) && !this.defeatedIds.has(c.id));
+    for (const character of dying) {
+      const saveResult = rollDeathSave(character, this.dice);
+      const narrative = saveResult.regainedHp
+        ? `🎲 ${character.name} rolls nat 20 on death save — springs back to 1 HP!`
+        : saveResult.successes > 0
+          ? `🎲 ${character.name} death save: ${saveResult.roll} → success (${character.deathSaveSuccesses}/3)`
+          : saveResult.failures > 0
+            ? `🎲 ${character.name} death save: ${saveResult.roll} → failure (${character.deathSaveFailures}/3)`
+            : `🎲 ${character.name} death save: ${saveResult.roll}`;
+      this.emit({ type: "death_save", characterId: character.id, narrative });
+
+      // Check if actually dead now
+      if (isDead(character)) {
+        this.defeatedIds.add(character.id);
+        this.emit({ type: "character_defeated", characterId: character.id });
+        character.statusEffects = character.statusEffects.filter(e => e.type !== "unconscious");
+        character.statusEffects.push({ type: "dead", turnsRemaining: 99, potency: 0, sourceId: "death" });
+        if (this.checkBattleEnd()) break;
+      }
+    }
+    if (this.finished) return;
+
     const living = this.getLiving();
     const order = determineTurnOrder(living, this.dice);
 
     for (const character of order) {
       if (this.finished) break;
-      // Re-check alive — someone may have died earlier this turn
+      // Re-check — someone may have died earlier this turn
       if (character.stats.hp <= 0) continue;
 
       const agent = this.agentMap.get(character.id);
       if (!agent) continue;
 
       this.emit({ type: "turn_start", turnNumber: this.turnNumber, actorId: character.id });
+
+      // Reset reaction at start of turn
+      resetReaction(character);
 
       const snapshot = createSnapshot(
         this.getLiving(),
@@ -220,8 +258,8 @@ export class BattleRunner {
         this.arena,
       );
 
-      // Check if frozen or paralyzed
-      if (character.statusEffects.some((e) => e.type === "freeze" || e.type === "paralyzed")) {
+      // Check if frozen, paralyzed, or stunned
+      if (character.statusEffects.some((e) => e.type === "freeze" || e.type === "paralyzed" || e.type === "stunned")) {
         const frozenResult: CombatResult = {
           action: { type: "wait", actorId: character.id },
           actorId: character.id,
@@ -233,6 +271,44 @@ export class BattleRunner {
         agent.onActionResult?.(frozenResult);
         tickCooldowns(character);
         continue;
+      }
+
+      // ── Spirit Guardians aura: 3d8 damage to enemies within 10ft ──
+      const sgEffect = character.statusEffects.find(e => e.type === "spirit_guardians");
+      if (sgEffect) {
+        const sgDamage = this.dice.rollDiceDetailed("3d8", `${character.name} Spirit Guardians`);
+        const sgRadius = 10;
+        for (const enemy of this.getLiving()) {
+          if (enemy.team === character.team) continue;
+          const dist = Math.sqrt(
+            (character.position.x - enemy.position.x) ** 2 +
+            (character.position.y - enemy.position.y) ** 2,
+          );
+          if (dist <= sgRadius) {
+            // WIS save for half damage
+            const saveMod = Math.floor((character.stats.wis - 10) / 2) + character.stats.proficiencyBonus;
+            const saveRoll = this.dice.d20(`${enemy.name} WIS save vs Spirit Guardians`);
+            const wisMod = Math.floor((enemy.stats.wis - 10) / 2) +
+              (enemy.savingThrowProfs.includes("wis") ? enemy.stats.proficiencyBonus : 0);
+            const succeeded = saveRoll + wisMod >= 8 + saveMod;
+            const dmg = succeeded ? Math.floor(sgDamage.total / 2) : sgDamage.total;
+            enemy.stats.hp = Math.max(0, enemy.stats.hp - dmg);
+            this.emit({
+              type: "action_result", actorId: character.id, targetId: enemy.id,
+              result: {
+                action: { type: "cast_spell", actorId: character.id, targetId: enemy.id, spellId: "spirit_guardians" },
+                actorId: character.id,
+                targetId: enemy.id,
+                damage: { damage: dmg, damageRolls: sgDamage.rolls, wasCrit: false, wasMiss: false, attackRoll: 0, attackTotal: 0, targetAc: 0, effective: "normal" as const, targetHp: enemy.stats.hp, targetMaxHp: enemy.stats.maxHp },
+                narrative: `${character.name}'s Spirit Guardians strike ${enemy.name} for ${dmg} radiant damage!${succeeded ? " (save for half)" : ""}`,
+              },
+            });
+            // Concentration check on enemy hit by Spirit Guardians
+            if (enemy.concentrationSpellId) {
+              concentrationSaveFromDamage(enemy, dmg, this.dice, this.characters);
+            }
+          }
+        }
       }
 
       // ── Ask the agent for its action (the core abstraction) ──
@@ -248,7 +324,9 @@ export class BattleRunner {
 
       // ── Resolve movement ──
       let moveResult: CombatResult["move"];
+      let oldPosition: Position | undefined;
       if (action.move) {
+        oldPosition = { ...character.position };
         const mv = resolveMove(character, action.move, this.arena);
         moveResult = mv;
         this.emit({
@@ -258,6 +336,20 @@ export class BattleRunner {
           to: mv.to,
           distance: mv.distanceMoved,
         });
+
+        // ── Check for Attacks of Opportunity ──
+        if (oldPosition) {
+          const enemies = this.getLiving().filter(c => c.team !== character.team);
+          const oppResult = checkOpportunityAttack(character, oldPosition, character.position, enemies, this.dice);
+          if (oppResult) {
+            this.emit({
+              type: "action_result",
+              actorId: oppResult.actorId,
+              targetId: character.id,
+              result: { action: { type: "wait", actorId: oppResult.actorId }, actorId: oppResult.actorId, targetId: character.id, narrative: oppResult.narrative, damage: oppResult.damage, reaction: oppResult },
+            });
+          }
+        }
       }
 
       // ── Resolve target ──
@@ -275,12 +367,26 @@ export class BattleRunner {
         ? character
         : target;
 
-      const result = resolveAction(character, actionTarget, action, this.dice, this.arena);
+      const result = resolveAction(character, actionTarget, action, this.dice, this.arena, this.characters);
 
       // Attach move result
       if (moveResult) result.move = moveResult;
 
       this.emit({ type: "action_result", actorId: character.id, targetId: target.id, result });
+
+      // ── Concentration check: if target took damage, check concentration ──
+      if (result.damage && result.damage.damage > 0 && target.concentrationSpellId) {
+        const concResult = concentrationSaveFromDamage(target, result.damage.damage, this.dice, this.characters);
+        if (!concResult.success) {
+          this.emit({
+            type: "action_result", actorId: target.id, targetId: target.id,
+            result: {
+              action: { type: "wait", actorId: target.id }, actorId: target.id,
+              narrative: `${target.name}'s concentration on ${target.concentrationSpellId ?? "spell"} is broken! (DC ${concResult.dc}, rolled ${concResult.roll})`,
+            },
+          });
+        }
+      }
 
       // Notify actor and target agents
       agent.onActionResult?.(result);
@@ -313,6 +419,68 @@ export class BattleRunner {
 
       // Check for defeat
       if (this.checkDefeat(character, target)) break;
+
+      // ── Action Surge: grant an extra action ──
+      const usedActionSurge = action.type === "class_ability" && action.abilityId === "action_surge";
+      if (usedActionSurge && character.stats.hp > 0) {
+        // Get a second action from the agent
+        const surgeSnapshot = createSnapshot(
+          this.getLiving(),
+          this.turnNumber,
+          "ongoing",
+          this.arena,
+        );
+        const surgeAction = await agent.getAction(surgeSnapshot);
+        this.emit({ type: "action_chosen", actorId: character.id, action: surgeAction });
+
+        // Resolve movement for surge action
+        let surgeMoveResult: CombatResult["move"];
+        if (surgeAction.move) {
+          const mv = resolveMove(character, surgeAction.move, this.arena);
+          surgeMoveResult = mv;
+          this.emit({ type: "move", actorId: character.id, from: mv.from, to: mv.to, distance: mv.distanceMoved });
+        }
+
+        const surgeTarget = this.resolveTarget(character, surgeAction);
+        const surgeSpell = surgeAction.type === "cast_spell"
+          ? character.spells.find(s => s.id === surgeAction.spellId)
+          : null;
+        const surgeIsSelfItem = surgeAction.type === "use_item" && (() => {
+          const item = character.inventory.find(i => i.id === surgeAction.itemId);
+          return item && (item.type === "heal_hp" || item.type === "cure" || item.type === "full_restore");
+        })();
+        const surgeActionTarget = (surgeSpell?.target === "self" || surgeAction.type === "defend" || surgeAction.type === "wait" || surgeIsSelfItem)
+          ? character
+          : surgeTarget;
+
+        const surgeResult = resolveAction(character, surgeActionTarget, surgeAction, this.dice, this.arena, this.characters);
+        if (surgeMoveResult) surgeResult.move = surgeMoveResult;
+
+        this.emit({ type: "action_result", actorId: character.id, targetId: surgeTarget.id, result: surgeResult });
+        agent.onActionResult?.(surgeResult);
+        if (surgeTarget.id !== character.id) {
+          this.agentMap.get(surgeTarget.id)?.onActionResult?.(surgeResult);
+        }
+        tickCooldowns(character);
+
+        this.log.turns.push({
+          turnNumber: this.turnNumber,
+          actorId: character.id,
+          results: [surgeResult],
+          stateSnapshot: createSnapshot(this.characters, this.turnNumber, this.finished ? "finished" : "ongoing", this.arena),
+        });
+
+        if (surgeResult.fledSuccessfully) {
+          this.finished = true;
+          this.winner = surgeTarget.id;
+          this.winningTeam = surgeTarget.team;
+          this.defeatedIds.add(character.id);
+          this.emit({ type: "character_defeated", characterId: character.id });
+          this.emit({ type: "battle_end", winner: this.winner, winningTeam: this.winningTeam, reason: `${character.name} fled!` });
+          break;
+        }
+        if (this.checkDefeat(character, surgeTarget)) break;
+      }
     }
 
     // Process status effects once per round (after all characters have acted)
@@ -370,59 +538,15 @@ export class BattleRunner {
   // ── Defeat Checks ───────────────────────────────────
 
   private checkDefeat(actor: Character, target: Character): boolean {
-    // Check if anyone died from that action
-    const dead: Character[] = [];
-    if (target.stats.hp <= 0 && target.id !== actor.id) dead.push(target);
-    // Friendly fire: actor could die from... well not from their own action normally,
-    // but status effects could kill them. Check next status tick.
-
-    for (const d of dead) {
-      if (!this.defeatedIds.has(d.id)) {
-        this.emit({ type: "character_defeated", characterId: d.id });
-        this.defeatedIds.add(d.id);
-      }
+    // Check if target dropped to 0 HP
+    if (target.stats.hp <= 0 && target.id !== actor.id && !this.defeatedIds.has(target.id)) {
+      // Mark as unconscious instead of immediately dead
+      markUnconscious(target);
+      this.emit({ type: "character_defeated", characterId: target.id });
+      this.defeatedIds.add(target.id);
     }
 
-    // Check win condition
-    const living = this.getLiving();
-
-    if (this.winCondition === "last_unit_standing") {
-      // FFA: only one left
-      if (living.length <= 1) {
-        this.finished = true;
-        this.winner = living[0]?.id;
-        this.winningTeam = living[0]?.team;
-        this.emit({
-          type: "battle_end",
-          winner: this.winner,
-          winningTeam: this.winningTeam,
-          reason: living.length === 1
-            ? `${living[0].name} is the last one standing!`
-            : "Everyone is dead — draw!",
-        });
-        return true;
-      }
-    } else {
-      // last_team_standing: check if only one team has living members
-      const livingTeams = new Set(living.map(c => c.team));
-      if (livingTeams.size <= 1) {
-        this.finished = true;
-        const survivingTeam = [...livingTeams][0];
-        this.winningTeam = survivingTeam;
-        this.winner = living[0]?.id; // first living member
-        this.emit({
-          type: "battle_end",
-          winner: this.winner,
-          winningTeam: this.winningTeam,
-          reason: survivingTeam
-            ? `Team "${survivingTeam}" wins! All enemies defeated!`
-            : "Mutual destruction — draw!",
-        });
-        return true;
-      }
-    }
-
-    return false;
+    return this.checkBattleEnd();
   }
 
   // ── Helpers ─────────────────────────────────────────
@@ -437,56 +561,59 @@ export class BattleRunner {
     }
   }
 
-  /** Check if anyone died from status effects after round-end tick */
-  private checkDefeatAfterStatusTick() {
-    const dead = this.characters.filter(c => c.stats.hp <= 0);
-    for (const d of dead) {
-      // Only emit defeat if not already emitted
-      if (!this.defeatedIds.has(d.id)) {
-        this.emit({ type: "character_defeated", characterId: d.id });
-        this.defeatedIds.add(d.id);
-      }
-    }
+  /** Check if battle should end based on conscious characters */
+  private checkBattleEnd(): boolean {
+    // In D&D, a battle ends when all enemies are downed (0 HP) or dead
+    // Count only conscious (HP > 0) as truly standing
+    const conscious = this.characters.filter(c => c.stats.hp > 0 && !this.defeatedIds.has(c.id));
 
-    const living = this.getLiving();
-    if (living.length === 0) {
-      this.finished = true;
-      this.emit({ type: "battle_end", reason: "Mutual destruction — draw!" });
-      return;
-    }
-
-    // Re-use the same win condition logic
     if (this.winCondition === "last_unit_standing") {
-      if (living.length <= 1) {
+      if (conscious.length <= 1) {
         this.finished = true;
-        this.winner = living[0]?.id;
-        this.winningTeam = living[0]?.team;
+        this.winner = conscious[0]?.id;
+        this.winningTeam = conscious[0]?.team;
         this.emit({
           type: "battle_end",
           winner: this.winner,
           winningTeam: this.winningTeam,
-          reason: living.length === 1
-            ? `${living[0].name} is the last one standing!`
-            : "Everyone is dead — draw!",
+          reason: conscious.length === 1
+            ? `${conscious[0].name} is the last one standing!`
+            : "Everyone is downed — draw!",
         });
+        return true;
       }
     } else {
-      const livingTeams = new Set(living.map(c => c.team));
-      if (livingTeams.size <= 1) {
+      // Team-based: check if only one team has conscious members
+      const consciousTeams = new Set(conscious.map(c => c.team));
+      if (consciousTeams.size <= 1) {
         this.finished = true;
-        const survivingTeam = [...livingTeams][0];
+        const survivingTeam = [...consciousTeams][0];
         this.winningTeam = survivingTeam;
-        this.winner = living[0]?.id;
+        this.winner = conscious[0]?.id;
         this.emit({
           type: "battle_end",
           winner: this.winner,
           winningTeam: this.winningTeam,
           reason: survivingTeam
-            ? `Team "${survivingTeam}" wins! All enemies defeated!`
-            : "Mutual destruction — draw!",
+            ? `Team ${survivingTeam} wins! All enemies downed!`
+            : "Everyone is downed — draw!",
         });
+        return true;
       }
     }
+    return false;
+  }
+
+  /** Check if anyone died from status effects after round-end tick */
+  private checkDefeatAfterStatusTick() {
+    for (const c of this.characters) {
+      if (c.stats.hp <= 0 && !this.defeatedIds.has(c.id) && !isDying(c) && !isStable(c) && !c.statusEffects.some(e => e.type === "unconscious")) {
+        markUnconscious(c);
+      }
+    }
+
+    // Check if battle ends from death during status tick
+    this.checkBattleEnd();
   }
 
   private emit(event: BattleEvent): void {

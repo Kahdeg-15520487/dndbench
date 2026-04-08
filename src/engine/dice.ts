@@ -1,6 +1,9 @@
 // ─────────────────────────────────────────────────────────
 //  Seeded Dice Roller — single PRNG source for all combat
 // ─────────────────────────────────────────────────────────
+
+import type { AdvantageMode } from "./types.js";
+
 //
 //  Every dice roll in combat comes from this one seeded PRNG.
 //  All rolls are logged and can be replayed.
@@ -71,6 +74,25 @@ export class DiceRoller {
   /** Roll a d20 (the most common roll in D&D) */
   d20(context: string): number {
     return this.d(20, context);
+  }
+
+  /** Roll a d20 with advantage or disadvantage.
+   *  advantage: roll 2d20, take higher
+   *  disadvantage: roll 2d20, take lower
+   *  normal: roll 1d20
+   *  Returns { result, discarded } so callers can see both rolls.
+   */
+  d20WithAdvantage(mode: AdvantageMode, context: string): { result: number; discarded?: number } {
+    if (mode === "normal") {
+      return { result: this.d(20, context) };
+    }
+    const r1 = this.d(20, context + " (roll 1)");
+    const r2 = this.d(20, context + " (roll 2)");
+    if (mode === "advantage") {
+      return r1 >= r2 ? { result: r1, discarded: r2 } : { result: r2, discarded: r1 };
+    }
+    // disadvantage: take lower
+    return r1 <= r2 ? { result: r1, discarded: r2 } : { result: r2, discarded: r1 };
   }
 
   /** Roll a d4 */

@@ -51,12 +51,16 @@ const ACTION_TOOLS: ToolDefinition[] = [
   {
     name: "attack",
     description:
-      "ACTION: Melee weapon attack. d20 + STR modifier vs target AC. Must be within melee range (5ft). Commits your turn.",
+      "ACTION: Melee weapon attack. d20 + STR modifier vs target AC. Must be within melee range (5ft). Paladins: use smite=true for Divine Smite (+2d8 radiant, uses spell slot). Commits your turn.",
     parameters: {
       target: {
         type: "string",
         description: "The enemy to attack.",
         required: true,
+      },
+      smite: {
+        type: "boolean",
+        description: "(Paladin only) Add Divine Smite: +2d8 radiant damage. Uses a spell slot.",
       },
     },
   },
@@ -85,6 +89,21 @@ const ACTION_TOOLS: ToolDefinition[] = [
           "hold_person",
           "fireball",
           "lightning_bolt",
+          "healing_word",
+          "misty_step",
+          "ray_of_frost",
+          "eldritch_blast",
+          "counterspell",
+          "bless",
+          "bane",
+          "web",
+          "spirit_guardians",
+          "haste",
+          "slow",
+          "invisibility",
+          "mirror_image",
+          "absorb_elements",
+          "dispel_magic",
         ],
         required: true,
       },
@@ -128,6 +147,30 @@ const ACTION_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: "grapple",
+    description:
+      "ACTION: Attempt to grapple a creature within 5ft. Athletics (STR) contest vs their Athletics/Acrobatics. Success sets their speed to 0. Useful to pin down spellcasters. Commits your turn.",
+    parameters: {
+      target: {
+        type: "string",
+        description: "The enemy to grapple (must be within 5ft).",
+        required: true,
+      },
+    },
+  },
+  {
+    name: "shove",
+    description:
+      "ACTION: Attempt to shove a creature within 5ft. Athletics (STR) contest vs their Athletics/Acrobatics. Success pushes them 5ft away and knocks them prone. Prone targets have disadvantage on attacks and advantage to melee attackers. Commits your turn.",
+    parameters: {
+      target: {
+        type: "string",
+        description: "The enemy to shove (must be within 5ft).",
+        required: true,
+      },
+    },
+  },
+  {
     name: "wait",
     description:
       "ACTION: Wait and do nothing. Useful when conserving resources or when no good option is available. Commits your turn.",
@@ -138,6 +181,28 @@ const ACTION_TOOLS: ToolDefinition[] = [
     description:
       "ACTION: Attempt to flee. Success chance based on Speed (30-50%). You lose if you flee. Last resort only. Commits your turn.",
     parameters: {},
+  },
+  {
+    name: "bonus_action",
+    description:
+      "BONUS ACTION: Use your bonus action alongside your main action. One per turn. Options: off_hand_attack (Two-Weapon Fighting), healing_word (1d4+WIS heal), cunning_action (rogue: dash/disengage/hide), misty_step (teleport 30ft).",
+    parameters: {
+      bonus_type: {
+        type: "string",
+        description: "Which bonus action to use.",
+        enum: ["off_hand_attack", "healing_word", "cunning_action", "misty_step"],
+        required: true,
+      },
+      variant: {
+        type: "string",
+        description: "For cunning_action only: dash (double speed), disengage (no AoO), or hide (invisible).",
+        enum: ["dash", "disengage", "hide"],
+      },
+      target: {
+        type: "string",
+        description: "Target for the bonus action (e.g. for healing_word or off_hand_attack).",
+      },
+    },
   },
 ];
 

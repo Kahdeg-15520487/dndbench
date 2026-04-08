@@ -10,11 +10,11 @@
 // ─────────────────────────────────────────────────────────
 import {
   Character, CombatAction, CombatResult, DamageResult,
-  MoveResult, StatusEffectType,
-  MoveVector, ArenaConfig, distance, maxMovePerTurn,
-  abilityModifier, AbilityName,
+  MoveResult, StatusEffect, StatusEffectType, Spell,
+  MoveVector, ArenaConfig, Position, distance, maxMovePerTurn,
+  abilityModifier, AbilityName, AdvantageMode, DamageType,
   hasSpellSlot, consumeSpellSlot, remainingSlots, totalRemainingSlots,
-  WeaponDef,
+  WeaponDef, BonusAction, ReactionResult, getCoverBonus,
 } from "./types.js";
 import type { DiceRoller } from "./dice.js";
 
@@ -31,13 +31,222 @@ function getMod(char: Character, ability: AbilityName): number {
 }
 
 /** Effective AC including shield status effects */
-function getEffectiveAc(char: Character): number {
+function getEffectiveAc(char: Character, attackerPos?: Position, arena?: ArenaConfig): number {
   let ac = char.stats.ac;
   if (char.isDefending) ac += 2; // Dodge = +2 AC (simplified)
+  if (char.fightingStyle === "defense") ac += 1;
   for (const eff of char.statusEffects) {
     if (eff.type === "shield") ac += eff.potency;
+    if (eff.type === "haste") ac += 2;
+    if (eff.type === "slow") ac -= 2;
+  }
+  // Cover bonus from arena terrain
+  if (attackerPos && arena) {
+    ac += getCoverBonus(attackerPos, char.position, arena);
   }
   return ac;
+}
+
+// ── Advantage / Disadvantage Calculation ──
+
+/** Get bless/bane modifier for attack rolls and saving throws */
+function getBlessBaneMod(char: Character, dice: DiceRoller): { mod: number; rolls: number[] } {
+  const rolls: number[] = [];
+  let mod = 0;
+  const bless = char.statusEffects.find(e => e.type === "bless");
+  if (bless) {
+    const d4 = dice.d(4, `${char.name} bless d4`);
+    rolls.push(d4);
+    mod += d4;
+  }
+  const bane = char.statusEffects.find(e => e.type === "bane");
+  if (bane) {
+    const d4 = dice.d(4, `${char.name} bane d4`);
+    rolls.push(d4);
+    mod -= d4;
+  }
+  return { mod, rolls };
+}
+
+/** Determine advantage mode for an attack roll */
+export function getAttackAdvantage(
+  attacker: Character,
+  defender: Character,
+  allCharacters: Character[],
+): AdvantageMode {
+  let hasAdvantage = false;
+  let hasDisadvantage = false;
+
+  // ── Conditions that grant advantage to the attacker ──
+  // Paralyzed defender → advantage on attacks
+  if (defender.statusEffects.some(e => e.type === "paralyzed")) hasAdvantage = true;
+  // Prone defender → advantage on melee attacks (within 5ft)
+  if (defender.statusEffects.some(e => e.type === "prone")) {
+    if (distance(attacker.position, defender.position) <= MELEE_RANGE) {
+      hasAdvantage = true;
+    } else {
+      hasDisadvantage = true;
+    }
+  }
+  // Stunned defender → advantage on attacks
+  if (defender.statusEffects.some(e => e.type === "stunned")) hasAdvantage = true;
+  // Invisible attacker → advantage on attacks
+  if (attacker.statusEffects.some(e => e.type === "invisible")) hasAdvantage = true;
+  // Blind/blinded attacker → disadvantage on attacks
+  if (attacker.statusEffects.some(e => e.type === "blind" || e.type === "blinded")) hasDisadvantage = true;
+  // Blind/blinded defender → attacks against have advantage
+  if (defender.statusEffects.some(e => e.type === "blind" || e.type === "blinded")) hasAdvantage = true;
+  // Poisoned attacker → disadvantage on attacks
+  if (attacker.statusEffects.some(e => e.type === "poisoned")) hasDisadvantage = true;
+  // Prone attacker → disadvantage on attacks
+  if (attacker.statusEffects.some(e => e.type === "prone")) hasDisadvantage = true;
+  // Restrained attacker → disadvantage on attacks
+  if (attacker.statusEffects.some(e => e.type === "restrained")) hasDisadvantage = true;
+  // Restrained defender → advantage on attacks against
+  if (defender.statusEffects.some(e => e.type === "restrained")) hasAdvantage = true;
+  // Defender is defending (Dodge) → disadvantage on attacks against
+  if (defender.isDefending) hasDisadvantage = true;
+
+  // ── Flanking: ally within 5ft of target on opposite side → advantage ──
+  if (allCharacters.length > 2) {
+    const allies = allCharacters.filter(c =>
+      c.id !== attacker.id && c.team === attacker.team && c.stats.hp > 0
+    );
+    for (const ally of allies) {
+      if (distance(ally.position, defender.position) <= MELEE_RANGE) {
+        hasAdvantage = true;
+        break;
+      }
+    }
+  }
+
+  // 5e RAW: if you have both advantage and disadvantage, they cancel out
+  if (hasAdvantage && hasDisadvantage) return "normal";
+  if (hasAdvantage) return "advantage";
+  if (hasDisadvantage) return "disadvantage";
+  return "normal";
+}
+
+/** Determine advantage mode for a saving throw */
+export function getSaveAdvantage(
+  saver: Character,
+  _saveAbility: AbilityName,
+): AdvantageMode {
+  // Paralyzed → auto-fail STR and DEX saves (no roll needed)
+  // Stunned → auto-fail STR and DEX saves
+  // These are handled separately in resolveSpell via autoFail
+  // Poisoned → disadvantage on all saves
+  if (saver.statusEffects.some(e => e.type === "poisoned")) {
+    return "disadvantage";
+  }
+  return "normal";
+}
+
+/** Check if a saving throw automatically fails due to conditions */
+export function autoFailSave(saver: Character, ability: AbilityName): boolean {
+  if (saver.statusEffects.some(e => e.type === "paralyzed" || e.type === "stunned")) {
+    return ability === "str" || ability === "dex";
+  }
+  return false;
+}
+
+/** Check if an attack auto-crits due to conditions (5e: only within 5ft) */
+export function autoCritFromCondition(attacker: Character, defender: Character): boolean {
+  if (!defender.statusEffects.some(e => e.type === "paralyzed" || e.type === "stunned")) {
+    return false;
+  }
+  // 5e RAW: auto-crit only from within 5ft
+  return distance(attacker.position, defender.position) <= MELEE_RANGE;
+}
+
+/** Check if sneak attack conditions are met */
+export function sneakAttackConditions(
+  attacker: Character,
+  defender: Character,
+  allCharacters: Character[],
+  attackAdvantage: AdvantageMode,
+): boolean {
+  // 5e RAW: advantage on the attack roll OR an ally within 5ft of the target
+  if (attackAdvantage === "advantage") return true;
+
+  // Check for ally within 5ft of the target
+  const allies = allCharacters.filter(c =>
+    c.id !== attacker.id && c.team === attacker.team && c.stats.hp > 0
+  );
+  for (const ally of allies) {
+    if (distance(ally.position, defender.position) <= MELEE_RANGE) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// ── Damage Type Modifiers ──
+
+/** Apply resistance/vulnerability/immunity to damage */
+export function applyDamageModifiers(
+  target: Character,
+  damage: number,
+  damageType: string | undefined,
+): number {
+  if (!damageType) return damage;
+  const dt = damageType as DamageType;
+  if (target.immunities.includes(dt)) return 0;
+  // Absorb Elements: resistance to all damage types when active
+  if (target.statusEffects.some(e => e.type === "absorb_elements")) return Math.floor(damage / 2);
+  if (target.resistances.includes(dt)) return Math.floor(damage / 2);
+  if (target.vulnerabilities.includes(dt)) return damage * 2;
+  return damage;
+}
+
+// ── Concentration ──
+
+/** Break concentration on a spell, removing its effect from caster and optionally all characters */
+export function breakConcentration(char: Character, allCharacters: Character[] = []): void {
+  if (!char.concentrationSpellId) return;
+  const spellId = char.concentrationSpellId;
+  const tag = `${char.id}_${spellId}`;
+  char.concentrationSpellId = undefined;
+  // Remove the status effect that this concentration spell created
+  char.statusEffects = char.statusEffects.filter(e => e.sourceId !== tag);
+  // Also remove from other characters (for control spells that target enemies)
+  for (const other of allCharacters) {
+    if (other.id !== char.id) {
+      other.statusEffects = other.statusEffects.filter(e => e.sourceId !== tag);
+    }
+  }
+}
+
+/** Apply a concentration spell: break old one, track new one */
+export function applyConcentration(
+  char: Character,
+  spellId: string,
+  allCharacters: Character[] = [],
+): void {
+  // Break existing concentration (removes old spell's effect from self + others)
+  breakConcentration(char, allCharacters);
+  // Set new concentration
+  char.concentrationSpellId = spellId;
+}
+
+/** Constitution save to maintain concentration after taking damage.
+ *  DC = max(10, half the damage taken). Called after damage is applied. */
+export function concentrationSaveFromDamage(
+  char: Character,
+  damageTaken: number,
+  dice: DiceRoller,
+  allCharacters: Character[] = [],
+): { success: boolean; dc: number; roll: number } {
+  if (!char.concentrationSpellId) return { success: true, dc: 0, roll: 0 };
+  const dc = Math.max(10, Math.floor(damageTaken / 2));
+  const conMod = abilityModifier(char.stats.con);
+  const profBonus = char.savingThrowProfs.includes("con") ? char.stats.proficiencyBonus : 0;
+  const roll = dice.d20("Concentration save");
+  const total = roll + conMod + profBonus;
+  const success = total >= dc;
+  if (!success) breakConcentration(char, allCharacters);
+  return { success, dc, roll };
 }
 
 // ═══════════════════════════════════════════════════════
@@ -45,13 +254,15 @@ function getEffectiveAc(char: Character): number {
 // ═══════════════════════════════════════════════════════
 
 interface AttackRollResult {
-  roll: number;        // natural d20
+  roll: number;        // natural d20 (kept roll)
   total: number;       // d20 + ability mod + proficiency
   targetAc: number;
   hit: boolean;
   critical: boolean;
   damage: number;
   damageRolls: number[];
+  discarded?: number;  // the discarded die from advantage/disadvantage
+  mirrorImageMiss?: boolean; // attack absorbed by a duplicate
 }
 
 function rollWeaponDamage(
@@ -60,11 +271,21 @@ function rollWeaponDamage(
   dice: DiceRoller,
   critical: boolean,
   context: string,
+  useVersatile: boolean = false,
 ): { total: number; rolls: number[] } {
-  const abilityMod = getMod(char, weapon.abilityMod);
+  // Finesse: use max(STR, DEX) modifier
+  let abilityMod: number;
+  if (weapon.properties.includes("finesse")) {
+    abilityMod = Math.max(abilityModifier(char.stats.str), abilityModifier(char.stats.dex));
+  } else {
+    abilityMod = getMod(char, weapon.abilityMod);
+  }
+
+  // Use versatile dice if applicable (two-handed grip, no off-hand)
+  const diceSpec = (useVersatile && weapon.versatileDice) ? weapon.versatileDice : weapon.damageDice;
 
   // Parse damage dice: e.g. "2d6", "1d8", "3d6"
-  const match = weapon.damageDice.match(/^(\d+)d(\d+)$/);
+  const match = diceSpec.match(/^(\d+)d(\d+)$/);
   if (!match) return { total: abilityMod, rolls: [] };
 
   const numDice = parseInt(match[1]);
@@ -74,11 +295,20 @@ function rollWeaponDamage(
   const rolls: number[] = [];
   let total = 0;
   for (let i = 0; i < effectiveNumDice; i++) {
-    const r = dice.d(dieSize, context);
+    let r = dice.d(dieSize, context);
+    // Great Weapon Fighting: reroll 1s and 2s (take the reroll)
+    if (char.fightingStyle === "great_weapon_fighting" && (r === 1 || r === 2)) {
+      r = dice.d(dieSize, context + " GWF reroll");
+    }
     rolls.push(r);
     total += r;
   }
   total += abilityMod;
+
+  // Dueling: +2 damage with one-handed weapon (not two-handed)
+  if (char.fightingStyle === "dueling" && !weapon.properties.includes("two-handed") && !useVersatile) {
+    total += 2;
+  }
 
   return { total, rolls };
 }
@@ -89,27 +319,54 @@ function resolveSingleAttack(
   weapon: WeaponDef,
   dice: DiceRoller,
   contextPrefix: string,
+  advantageMode: AdvantageMode = "normal",
+  arena?: ArenaConfig,
 ): AttackRollResult {
-  const abilityMod = getMod(attacker, weapon.abilityMod);
+  // Finesse: use max(STR, DEX) modifier for attack roll
+  let abilityMod: number;
+  if (weapon.properties.includes("finesse")) {
+    abilityMod = Math.max(abilityModifier(attacker.stats.str), abilityModifier(attacker.stats.dex));
+  } else {
+    abilityMod = getMod(attacker, weapon.abilityMod);
+  }
   const profBonus = attacker.stats.proficiencyBonus;
-  const targetAc = getEffectiveAc(defender);
+  const targetAc = getEffectiveAc(defender, attacker.position, arena);
 
-  const roll = dice.d20(contextPrefix + " attack roll");
-  const total = roll + abilityMod + profBonus;
+  const { result: roll, discarded } = dice.d20WithAdvantage(advantageMode, contextPrefix + " attack roll");
+  const { mod: blessBaneMod } = getBlessBaneMod(attacker, dice);
+  const total = roll + abilityMod + profBonus + blessBaneMod;
 
   const isCrit = roll === 20;
-  const isHit = isCrit || (roll !== 1 && total >= targetAc);
+  let isHitFinal = isCrit || (roll !== 1 && total >= targetAc);
+
+  // Mirror Image: if defender has duplicates, attack might hit a duplicate
+  let mirrorImageMiss = false;
+  const mirrorEffect = defender.statusEffects.find(e => e.type === "mirror_image");
+  if (mirrorEffect && isHitFinal && !isCrit) {
+    const images = mirrorEffect.potency; // 1-3 images
+    const mirrorRoll = dice.d(20, "Mirror Image check");
+    const missThreshold = 6 + images * 2; // 3→12, 2→10, 1→8
+    if (mirrorRoll <= missThreshold) {
+      mirrorImageMiss = true;
+      isHitFinal = false;
+      mirrorEffect.potency--;
+      if (mirrorEffect.potency <= 0) {
+        defender.statusEffects = defender.statusEffects.filter(e => e.type !== "mirror_image");
+      }
+    }
+  }
 
   let damage = 0;
   let damageRolls: number[] = [];
 
-  if (isHit) {
-    const dmgResult = rollWeaponDamage(weapon, attacker, dice, isCrit, contextPrefix + " damage");
+  if (isHitFinal) {
+    const useVersatile = weapon.properties.includes("versatile") && !attacker.equippedShield;
+    const dmgResult = rollWeaponDamage(weapon, attacker, dice, isCrit, contextPrefix + " damage", useVersatile);
     damage = dmgResult.total;
     damageRolls = dmgResult.rolls;
   }
 
-  return { roll, total, targetAc, hit: isHit, critical: isCrit, damage, damageRolls };
+  return { roll, total, targetAc, hit: isHitFinal, critical: isCrit, damage, damageRolls, discarded, mirrorImageMiss };
 }
 
 function resolveAttack(
@@ -117,6 +374,8 @@ function resolveAttack(
   defender: Character,
   action: CombatAction,
   dice: DiceRoller,
+  allCharacters: Character[] = [],
+  arena?: ArenaConfig,
 ): CombatResult {
   // Range check
   const dist = distance(attacker.position, defender.position);
@@ -127,28 +386,38 @@ function resolveAttack(
     };
   }
 
-  const weapon = attacker.weapon;
-  const mainAttack = resolveSingleAttack(attacker, defender, weapon, dice, `${attacker.name} → ${defender.name}`);
+  // Calculate advantage/disadvantage
+  const advantageMode = getAttackAdvantage(attacker, defender, allCharacters);
 
-  // Attacks against paralyzed targets auto-crit and auto-hit
-  const isParalyzed = defender.statusEffects.some(e => e.type === "paralyzed");
-  if (isParalyzed) {
+  const weapon = attacker.weapon;
+  const mainAttack = resolveSingleAttack(attacker, defender, weapon, dice, `${attacker.name} → ${defender.name}`, advantageMode, arena);
+
+  // Attacks against paralyzed/stunned targets auto-crit if within 5ft (5e RAW)
+  const shouldAutoCrit = autoCritFromCondition(attacker, defender);
+  if (shouldAutoCrit) {
     mainAttack.hit = true;
     if (!mainAttack.critical) {
       mainAttack.critical = true;
-      // Re-roll damage with double dice
-      const dmgResult = rollWeaponDamage(weapon, attacker, dice, true, `${attacker.name} → ${defender.name} (paralyzed crit)`);
+      const useVersatile = weapon.properties.includes("versatile") && !attacker.equippedShield;
+      const dmgResult = rollWeaponDamage(weapon, attacker, dice, true, `${attacker.name} → ${defender.name} (auto-crit)`, useVersatile);
       mainAttack.damage = dmgResult.total;
       mainAttack.damageRolls = dmgResult.rolls;
     }
   }
 
+  // Paralyzed/stunned targets auto-fail STR/DEX saves
+  const isParalyzedOrStunned = defender.statusEffects.some(e => e.type === "paralyzed" || e.type === "stunned");
+  if (isParalyzedOrStunned && !shouldAutoCrit) {
+    // Still auto-hit even from range (advantage → likely hit), but no auto-crit
+    mainAttack.hit = true;
+  }
+
   let totalDamage = mainAttack.damage;
   const allDamageRolls = [...mainAttack.damageRolls];
 
-  // Sneak Attack: +3d6 on first hit if rogue
+  // Sneak Attack: +3d6 on first hit if rogue AND conditions are met
   const isRogue = attacker.features.some(f => f.id === "sneak_attack");
-  if (isRogue && mainAttack.hit) {
+  if (isRogue && mainAttack.hit && sneakAttackConditions(attacker, defender, allCharacters, advantageMode)) {
     for (let i = 0; i < 3; i++) {
       const sneakD = dice.d(6, "Sneak Attack damage");
       allDamageRolls.push(sneakD);
@@ -165,7 +434,7 @@ function resolveAttack(
   const extraAttacks: DamageResult[] = [];
   const hasExtraAttack = attacker.features.some(f => f.id === "extra_attack");
   if (hasExtraAttack && mainAttack.hit) {
-    const extra = resolveSingleAttack(attacker, defender, weapon, dice, `${attacker.name} (extra) → ${defender.name}`);
+    const extra = resolveSingleAttack(attacker, defender, weapon, dice, `${attacker.name} (extra) → ${defender.name}`, advantageMode, arena);
     const extraDamageResult: DamageResult = {
       damage: extra.damage,
       wasCrit: extra.critical,
@@ -187,8 +456,10 @@ function resolveAttack(
   }
 
   // Divine Smite (paladin: +2d8 radiant on hit, uses spell slot)
+  // Only triggers when explicitly chosen via action.abilityId === "divine_smite"
+  const wantSmite = action.abilityId === "divine_smite";
   const canSmite = attacker.features.some(f => f.id === "divine_smite");
-  if (canSmite && mainAttack.hit && totalRemainingSlots(attacker.spellSlots) > 0) {
+  if (wantSmite && canSmite && mainAttack.hit && totalRemainingSlots(attacker.spellSlots) > 0) {
     // Auto-smite on hit — consume lowest available slot
     let smiteSlot = 0;
     for (let lv = 1; lv <= 9; lv++) {
@@ -215,14 +486,19 @@ function resolveAttack(
 
   // Build narrative
   let narrative: string;
+  const advNote = advantageMode === "advantage" ? " (advantage)" : advantageMode === "disadvantage" ? " (disadvantage)" : "";
   if (!mainAttack.hit) {
-    narrative = mainAttack.roll === 1
-      ? `${attacker.name} swings at ${defender.name} — critical miss! (nat 1)`
-      : `${attacker.name} attacks ${defender.name} — misses! (${mainAttack.total} vs AC ${mainAttack.targetAc})`;
+    if (mainAttack.mirrorImageMiss) {
+      narrative = `${attacker.name} attacks ${defender.name} but hits a mirror image duplicate instead! (${mainAttack.total} vs AC ${mainAttack.targetAc})`;
+    } else {
+      narrative = mainAttack.roll === 1
+        ? `${attacker.name} swings at ${defender.name}${advNote} — critical miss! (nat 1${mainAttack.discarded ? `, discarded ${mainAttack.discarded}` : ''})`
+        : `${attacker.name} attacks ${defender.name}${advNote} — misses! (${mainAttack.total} vs AC ${mainAttack.targetAc})`;
+    }
   } else if (mainAttack.critical) {
-    narrative = `${attacker.name} CRITICAL HIT on ${defender.name}! ${totalDamage} damage (${mainAttack.total} vs AC ${mainAttack.targetAc})`;
+    narrative = `${attacker.name} CRITICAL HIT on ${defender.name}${advNote}! ${totalDamage} damage (${mainAttack.total} vs AC ${mainAttack.targetAc})`;
   } else {
-    narrative = `${attacker.name} hits ${defender.name} for ${totalDamage} damage (${mainAttack.total} vs AC ${mainAttack.targetAc})`;
+    narrative = `${attacker.name} hits ${defender.name}${advNote} for ${totalDamage} damage (${mainAttack.total} vs AC ${mainAttack.targetAc})`;
   }
 
   if (defender.stats.hp <= 0) {
@@ -252,11 +528,32 @@ function resolveAttack(
 //  Spell Resolution
 // ═══════════════════════════════════════════════════════
 
+/** Apply a spell's status effect with concentration tracking if needed */
+function applySpellEffect(
+  caster: Character,
+  target: Character,
+  spell: Spell,
+  allCharacters: Character[] = [],
+): void {
+  if (!spell.statusEffect) return;
+  const effect: StatusEffect = {
+    type: spell.statusEffect.type,
+    turnsRemaining: spell.statusEffect.duration,
+    potency: spell.statusEffect.potency,
+    sourceId: spell.concentration ? `${caster.id}_${spell.id}` : caster.id,
+  };
+  if (spell.concentration) {
+    applyConcentration(caster, spell.id, allCharacters);
+  }
+  target.statusEffects.push(effect);
+}
+
 function resolveSpell(
   caster: Character,
   target: Character,
   action: CombatAction,
   dice: DiceRoller,
+  arena?: ArenaConfig,
 ): CombatResult {
   const spell = caster.spells.find(s => s.id === action.spellId);
   if (!spell) {
@@ -301,12 +598,7 @@ function resolveSpell(
   // Buff spells (self)
   if (spell.type === "buff" && spell.target === "self") {
     if (spell.statusEffect) {
-      caster.statusEffects.push({
-        type: spell.statusEffect.type,
-        turnsRemaining: spell.statusEffect.duration,
-        potency: spell.statusEffect.potency,
-        sourceId: caster.id,
-      });
+      applySpellEffect(caster, caster, spell, [caster, target]);
     }
     return {
       action, actorId: caster.id,
@@ -355,6 +647,114 @@ function resolveSpell(
     };
   }
 
+  // Control/status spells (e.g. Hold Person)
+  if (spell.type === "control") {
+    let statusApplied: StatusEffectType | undefined;
+
+    if (spell.saveAbility) {
+      // Auto-fail from conditions that prevent saving
+      if (autoFailSave(target, spell.saveAbility)) {
+        if (spell.statusEffect) {
+          applySpellEffect(caster, target, spell, [caster, target]);
+          statusApplied = spell.statusEffect.type;
+        }
+        return {
+          action, actorId: caster.id, targetId: target.id,
+          narrative: `${caster.name} casts ${spell.name}! ${target.name} auto-fails save — ${statusApplied}!`,
+          spell: {
+            spellName: spell.name,
+            slotUsed: spell.level,
+            slotsRemaining: buildSlotsMap(caster),
+            cooldownRemaining: spell.currentCooldown,
+            statusApplied,
+          },
+        };
+      }
+
+      const saveMod = getMod(target, spell.saveAbility)
+        + (target.savingThrowProfs.includes(spell.saveAbility) ? target.stats.proficiencyBonus : 0);
+      const saveAdvMode = getSaveAdvantage(target, spell.saveAbility);
+      const { result: naturalSave } = dice.d20WithAdvantage(saveAdvMode, `${target.name} ${spell.saveAbility.toUpperCase()} save vs ${spell.name}`);
+      const { mod: saveBlessBane } = getBlessBaneMod(target, dice);
+      const saveTotal = naturalSave + saveMod + saveBlessBane;
+      const saveSuccess = saveTotal >= spellSaveDc;
+
+      if (!saveSuccess && spell.statusEffect) {
+        applySpellEffect(caster, target, spell, [caster, target]);
+        statusApplied = spell.statusEffect.type;
+      }
+
+      const narrative = saveSuccess
+        ? `${caster.name} casts ${spell.name}! ${target.name} saves (DC ${spellSaveDc}) — resisted!`
+        : `${caster.name} casts ${spell.name}! ${target.name} fails save — ${statusApplied}!`;
+
+      return {
+        action, actorId: caster.id, targetId: target.id,
+        narrative,
+        spell: {
+          spellName: spell.name,
+          slotUsed: spell.level,
+          slotsRemaining: buildSlotsMap(caster),
+          cooldownRemaining: spell.currentCooldown,
+          statusApplied,
+        },
+      };
+    }
+
+    // ── Dispel Magic: remove all magical effects and break concentration ──
+    if (spell.id === "dispel_magic") {
+      const removedTypes: string[] = [];
+      // Remove all status effects that came from a spell (have a sourceId pattern)
+      target.statusEffects = target.statusEffects.filter(e => {
+        // Keep non-magical effects (grappled, prone, etc.)
+        const magicalTypes = ["paralyzed", "shield", "haste", "slow", "invisible", "mirror_image",
+          "bless", "bane", "restrained", "spirit_guardians", "blinded", "poisoned",
+          "burn", "freeze", "poison", "regen", "defending", "stunned", "frightened",
+          "absorb_elements", "disengaging", "unconscious", "stable"];
+        if (magicalTypes.includes(e.type)) {
+          removedTypes.push(e.type);
+          return false;
+        }
+        return true;
+      });
+      // Break target's concentration
+      if (target.concentrationSpellId) {
+        removedTypes.push(`concentration:${target.concentrationSpellId}`);
+        breakConcentration(target, [caster, target]);
+      }
+      const narrative = removedTypes.length > 0
+        ? `${caster.name} casts Dispel Magic on ${target.name}! Removed: ${removedTypes.join(", ")}`
+        : `${caster.name} casts Dispel Magic on ${target.name} — no magical effects to remove.`;
+      return {
+        action, actorId: caster.id, targetId: target.id,
+        narrative,
+        spell: {
+          spellName: spell.name,
+          slotUsed: spell.level,
+          slotsRemaining: buildSlotsMap(caster),
+          cooldownRemaining: spell.currentCooldown,
+        },
+      };
+    }
+
+    // Non-save control spell (just apply effect)
+    if (spell.statusEffect) {
+      applySpellEffect(caster, target, spell, [caster, target]);
+      statusApplied = spell.statusEffect.type;
+    }
+    return {
+      action, actorId: caster.id, targetId: target.id,
+      narrative: `${caster.name} casts ${spell.name} on ${target.name}!${statusApplied ? ` ${target.name} is ${statusApplied}!` : ""}`,
+      spell: {
+        spellName: spell.name,
+        slotUsed: spell.level,
+        slotsRemaining: buildSlotsMap(caster),
+        cooldownRemaining: spell.currentCooldown,
+        statusApplied,
+      },
+    };
+  }
+
   // Damage spells
   if (spell.type === "damage") {
     let totalDamage = 0;
@@ -367,47 +767,159 @@ function resolveSpell(
     let saveRoll: number | undefined;
     let saveSuccess: boolean | undefined;
 
+    let narrativeOverride: string | undefined;
+
     // Attack roll spell (e.g. Fire Bolt, Scorching Ray)
     if (spell.attackRoll) {
-      const spellAttackMod = castingMod + caster.stats.proficiencyBonus;
-      const ac = getEffectiveAc(target);
-      const naturalRoll = dice.d20(`${caster.name} spell attack (${spell.name})`);
-      const total = naturalRoll + spellAttackMod;
-      attackRoll = naturalRoll;
-      attackTotal = total;
-      targetAc = ac;
+      // ── Scorching Ray: 3 separate rays, each 2d6 fire ──
+      if (spell.id === "scorching_ray") {
+        const spellAttackMod = castingMod + caster.stats.proficiencyBonus;
+        const ac = getEffectiveAc(target, caster.position, arena);
+        const advMode = getAttackAdvantage(caster, target, [caster, target]);
+        targetAc = ac;
+        attackTotal = spellAttackMod;
 
-      hit = naturalRoll !== 1 && (naturalRoll === 20 || total >= ac);
-      wasCrit = naturalRoll === 20;
+        let rayHits = 0;
+        let rayDamage = 0;
+        const allRayRolls: number[] = [];
 
-      if (hit && spell.damageDice) {
-        const dmg = rollDamageDice(spell.damageDice, dice, `${spell.name} damage`, wasCrit);
-        totalDamage = dmg.total + castingMod;
-        damageRolls = dmg.rolls;
+        for (let ray = 0; ray < 3; ray++) {
+          const { result: naturalRoll } = dice.d20WithAdvantage(advMode, `${caster.name} Scorching Ray #${ray + 1}`);
+          const rayTotal = naturalRoll + spellAttackMod;
+          const rayCrit = naturalRoll === 20;
+          const rayHit = naturalRoll !== 1 && (rayCrit || rayTotal >= ac);
+
+          if (rayHit) {
+            rayHits++;
+            const dmg = rollDamageDice(spell.damageDice || "2d6", dice, `Scorching Ray #${ray + 1} damage`, rayCrit);
+            rayDamage += dmg.total;
+            allRayRolls.push(...dmg.rolls);
+            if (rayCrit) wasCrit = true;
+          }
+          if (ray === 0) {
+            attackRoll = naturalRoll;
+            hit = rayHit;
+          }
+        }
+
+        totalDamage = rayDamage;
+        damageRolls = allRayRolls;
+        narrativeOverride = `${caster.name} fires Scorching Ray at ${target.name}! ${rayHits}/3 rays hit for ${totalDamage} fire damage!`;
+      }
+      // ── Eldritch Blast: 2 beams at level 5, each 1d10 force ──
+      else if (spell.id === "eldritch_blast") {
+        const spellAttackMod = castingMod + caster.stats.proficiencyBonus;
+        const ac = getEffectiveAc(target, caster.position, arena);
+        const advMode = getAttackAdvantage(caster, target, [caster, target]);
+        targetAc = ac;
+        attackTotal = spellAttackMod;
+
+        let beamHits = 0;
+        let beamDamage = 0;
+        const allBeamRolls: number[] = [];
+
+        for (let beam = 0; beam < 2; beam++) {
+          const { result: naturalRoll } = dice.d20WithAdvantage(advMode, `${caster.name} Eldritch Blast #${beam + 1}`);
+          const beamTotal = naturalRoll + spellAttackMod;
+          const beamCrit = naturalRoll === 20;
+          const beamHit = naturalRoll !== 1 && (beamCrit || beamTotal >= ac);
+
+          if (beamHit) {
+            beamHits++;
+            const dmg = rollDamageDice("1d10", dice, `Eldritch Blast #${beam + 1} damage`, beamCrit);
+            beamDamage += dmg.total;
+            allBeamRolls.push(...dmg.rolls);
+            if (beamCrit) wasCrit = true;
+          }
+          if (beam === 0) {
+            attackRoll = naturalRoll;
+            hit = beamHit;
+          }
+        }
+
+        totalDamage = beamDamage;
+        damageRolls = allBeamRolls;
+        narrativeOverride = `${caster.name} fires Eldritch Blast at ${target.name}! ${beamHits}/2 beams hit for ${totalDamage} force damage!`;
+      }
+      // ── Ray of Frost: 1d8 cold + speed reduction ──
+      else if (spell.id === "ray_of_frost") {
+        const spellAttackMod = castingMod + caster.stats.proficiencyBonus;
+        const ac = getEffectiveAc(target, caster.position, arena);
+        const advMode = getAttackAdvantage(caster, target, [caster, target]);
+        const { result: naturalRoll } = dice.d20WithAdvantage(advMode, `${caster.name} Ray of Frost attack`);
+        const total = naturalRoll + spellAttackMod;
+        attackRoll = naturalRoll;
+        attackTotal = total;
+        targetAc = ac;
+
+        hit = naturalRoll !== 1 && (naturalRoll === 20 || total >= ac);
+        wasCrit = naturalRoll === 20;
+
+        if (hit) {
+          const dmg = rollDamageDice(spell.damageDice || "1d8", dice, `Ray of Frost damage`, wasCrit);
+          totalDamage = dmg.total + castingMod;
+          damageRolls = dmg.rolls;
+          // Speed reduction: -10ft
+          target.stats.speed = Math.max(0, target.stats.speed - 10);
+        }
+      }
+      else {
+        // ── Single attack roll spells (Fire Bolt, etc.) ──
+        const spellAttackMod = castingMod + caster.stats.proficiencyBonus;
+        const ac = getEffectiveAc(target, caster.position, arena);
+        const advMode = getAttackAdvantage(caster, target, [caster, target]);
+        const { result: naturalRoll } = dice.d20WithAdvantage(advMode, `${caster.name} spell attack (${spell.name})`);
+        const total = naturalRoll + spellAttackMod;
+        attackRoll = naturalRoll;
+        attackTotal = total;
+        targetAc = ac;
+
+        hit = naturalRoll !== 1 && (naturalRoll === 20 || total >= ac);
+        wasCrit = naturalRoll === 20;
+
+        if (hit && spell.damageDice) {
+          const dmg = rollDamageDice(spell.damageDice, dice, `${spell.name} damage`, wasCrit);
+          totalDamage = dmg.total + castingMod;
+          damageRolls = dmg.rolls;
+        }
       }
     }
     // Saving throw spell (e.g. Fireball)
     else if (spell.saveAbility) {
       const saveAbility = spell.saveAbility;
-      const saveMod = getMod(target, saveAbility)
-        + (target.savingThrowProfs.includes(saveAbility) ? target.stats.proficiencyBonus : 0);
-      const naturalSave = dice.d20(`${target.name} ${saveAbility.toUpperCase()} save vs ${spell.name}`);
-      const saveTotal = naturalSave + saveMod;
-      saveRoll = naturalSave;
-      saveSuccess = saveTotal >= spellSaveDc;
 
-      if (spell.damageDice && spell.damageDice !== "0") {
-        const dmg = rollDamageDice(spell.damageDice, dice, `${spell.name} damage`, false);
-        totalDamage = dmg.total;
-        damageRolls = dmg.rolls;
+      // Auto-fail from paralyzed/stunned
+      if (autoFailSave(target, saveAbility)) {
+        saveRoll = 0;
+        saveSuccess = false;
+        if (spell.damageDice && spell.damageDice !== "0") {
+          const dmg = rollDamageDice(spell.damageDice, dice, `${spell.name} damage`, false);
+          totalDamage = dmg.total;
+          damageRolls = dmg.rolls;
+        }
+      } else {
+        const saveMod = getMod(target, saveAbility)
+          + (target.savingThrowProfs.includes(saveAbility) ? target.stats.proficiencyBonus : 0);
+        const saveAdvMode = getSaveAdvantage(target, saveAbility);
+        const { result: naturalSave } = dice.d20WithAdvantage(saveAdvMode, `${target.name} ${saveAbility.toUpperCase()} save vs ${spell.name}`);
+        const { mod: saveBlessBane } = getBlessBaneMod(target, dice);
+        const saveTotal = naturalSave + saveMod + saveBlessBane;
+        saveRoll = naturalSave;
+        saveSuccess = saveTotal >= spellSaveDc;
 
-        if (saveSuccess && spell.halfDamageOnSave) {
-          totalDamage = Math.floor(totalDamage / 2);
+        if (spell.damageDice && spell.damageDice !== "0") {
+          const dmg = rollDamageDice(spell.damageDice, dice, `${spell.name} damage`, false);
+          totalDamage = dmg.total;
+          damageRolls = dmg.rolls;
 
-          // Evasion: rogue takes no damage on successful save
-          const hasEvasion = target.features.some(f => f.id === "evasion");
-          if (hasEvasion) {
-            totalDamage = 0;
+          if (saveSuccess && spell.halfDamageOnSave) {
+            totalDamage = Math.floor(totalDamage / 2);
+
+            // Evasion: rogue takes no damage on successful save
+            const hasEvasion = target.features.some(f => f.id === "evasion");
+            if (hasEvasion) {
+              totalDamage = 0;
+            }
           }
         }
       }
@@ -427,39 +939,51 @@ function resolveSpell(
       // For save spells, only apply on failed save
       if (spell.saveAbility) {
         if (!saveSuccess) {
-          target.statusEffects.push({
-            type: spell.statusEffect.type,
-            turnsRemaining: spell.statusEffect.duration,
-            potency: spell.statusEffect.potency,
-            sourceId: caster.id,
-          });
+          applySpellEffect(caster, target, spell, [caster, target]);
           statusApplied = spell.statusEffect.type;
         }
       } else {
         // Non-save damage spell with status effect — apply unconditionally
-        // Note: currently no spells use this path (statusEffect without saveAbility
-        // on a non-buff spell), but the branch is kept for future spell definitions
-        target.statusEffects.push({
-          type: spell.statusEffect.type,
-          turnsRemaining: spell.statusEffect.duration,
-          potency: spell.statusEffect.potency,
-          sourceId: caster.id,
-        });
+        applySpellEffect(caster, target, spell, [caster, target]);
         statusApplied = spell.statusEffect.type;
       }
     }
 
-    // Apply damage
+    // Apply damage (with resistance/vulnerability/immunity)
     if (hit && totalDamage > 0) {
+      totalDamage = applyDamageModifiers(target, totalDamage, spell.damageType);
       target.stats.hp = Math.max(0, target.stats.hp - totalDamage);
+    }
+
+    // Mirror Image: spell attacks can also hit duplicates
+    let spellMirrorMiss = false;
+    const mirrorEff = target.statusEffects.find(e => e.type === "mirror_image");
+    if (mirrorEff && hit && !wasCrit) {
+      const images = mirrorEff.potency;
+      const mirrorRoll = dice.d(20, "Mirror Image check (spell)");
+      const missThreshold = 6 + images * 2;
+      if (mirrorRoll <= missThreshold) {
+        spellMirrorMiss = true;
+        hit = false;
+        mirrorEff.potency--;
+        if (mirrorEff.potency <= 0) {
+          target.statusEffects = target.statusEffects.filter(e => e.type !== "mirror_image");
+        }
+      }
     }
 
     // Build narrative
     let narrative: string;
-    if (!hit) {
-      narrative = attackRoll !== undefined
-        ? `${caster.name} casts ${spell.name} at ${target.name} — misses! (${attackTotal} vs AC ${targetAc})`
-        : `${caster.name} casts ${spell.name} — but it fails!`;
+    if (narrativeOverride) {
+      narrative = narrativeOverride;
+    } else if (!hit) {
+      if (spellMirrorMiss) {
+        narrative = `${caster.name} casts ${spell.name} at ${target.name} but hits a mirror image duplicate instead!`;
+      } else {
+        narrative = attackRoll !== undefined
+          ? `${caster.name} casts ${spell.name} at ${target.name} — misses! (${attackTotal} vs AC ${targetAc})`
+          : `${caster.name} casts ${spell.name} — but it fails!`;
+      }
     } else if (spell.saveAbility) {
       narrative = saveSuccess
         ? `${caster.name} casts ${spell.name}! ${target.name} saves (DC ${spellSaveDc}) — ${totalDamage} damage.`
@@ -560,8 +1084,19 @@ function resolveItem(
   item.quantity--;
 
   if (item.type === "heal_hp") {
-    // Potions heal a fixed amount based on potency (simplified from dice)
-    const healAmount = item.potency;
+    // Potions heal using dice rolls (5e RAW)
+    let healAmount = 0;
+    if (item.id === "health_potion") {
+      // Potion of Healing: 2d4+2
+      for (let i = 0; i < 2; i++) healAmount += dice.d(4, "Potion of Healing");
+      healAmount += 2;
+    } else if (item.id === "greater_health_potion") {
+      // Potion of Greater Healing: 4d4+4
+      for (let i = 0; i < 4; i++) healAmount += dice.d(4, "Greater Healing");
+      healAmount += 4;
+    } else {
+      healAmount = item.potency; // fallback for unknown potions
+    }
     target.stats.hp = Math.min(target.stats.maxHp, target.stats.hp + healAmount);
 
     return {
@@ -680,32 +1215,49 @@ function resolveClassAbility(
     };
   }
 
-  // Lay on Hands: heal up to 25 HP
+  // Lay on Hands: heal from pool (paladin only)
   if (abilityId === "lay_on_hands") {
+    if (actor.layOnHandsPool <= 0) {
+      return { action, actorId: actor.id, narrative: `${actor.name} has no Lay on Hands pool remaining!` };
+    }
     const missing = actor.stats.maxHp - actor.stats.hp;
-    const healAmount = Math.min(25, missing);
+    const healAmount = Math.min(actor.layOnHandsPool, missing);
     actor.stats.hp = Math.min(actor.stats.maxHp, actor.stats.hp + healAmount);
+    actor.layOnHandsPool -= healAmount;
     return {
       action, actorId: actor.id,
-      narrative: `${actor.name} uses Lay on Hands! Heals ${healAmount} HP.`,
+      narrative: `${actor.name} uses Lay on Hands! Heals ${healAmount} HP. (${actor.layOnHandsPool} pool remaining)`,
       heal: { amount: healAmount, targetHp: actor.stats.hp, targetMaxHp: actor.stats.maxHp },
-      abilityResult: { name: "Lay on Hands", description: "Heal up to 25 HP", value: healAmount },
+      abilityResult: { name: "Lay on Hands", description: `Heal ${healAmount} HP from pool`, value: healAmount },
     };
   }
 
   // Arcane Recovery: recover spell slots (recover up to half caster level in slot levels)
   if (abilityId === "arcane_recovery") {
-    // Simplified: recover one highest available slot
-    for (let lv = 9; lv >= 1; lv--) {
+    // 5e RAW: recover slot levels equal to half caster level (rounded up)
+    // At level 5: ceil(5/2) = 3 slot levels
+    const maxRecoverLevels = Math.ceil(actor.level / 2);
+    let remaining = maxRecoverLevels;
+    const recovered: string[] = [];
+
+    // Recover from highest level down (greedy — best value)
+    const maxSlotLevel = Math.max(...Object.keys(actor.spellSlots).map(Number).filter(n => !isNaN(n)));
+    for (let lv = maxSlotLevel; lv >= 1 && remaining > 0; lv--) {
       const slot = actor.spellSlots[lv];
-      if (slot && slot.used > 0) {
+      if (slot && slot.used > 0 && lv <= remaining) {
         slot.used--;
-        return {
-          action, actorId: actor.id,
-          narrative: `${actor.name} uses Arcane Recovery! Recovered a ${lv}${ordinalSuffix(lv)} level slot.`,
-          abilityResult: { name: "Arcane Recovery", description: "Recover spell slots", value: lv },
-        };
+        remaining -= lv;
+        recovered.push(`${lv}${ordinalSuffix(lv)}`);
       }
+    }
+
+    if (recovered.length > 0) {
+      const slotDesc = recovered.join(" + ");
+      return {
+        action, actorId: actor.id,
+        narrative: `${actor.name} uses Arcane Recovery! Recovered ${slotDesc} level slot${recovered.length > 1 ? "s" : ""}.`,
+        abilityResult: { name: "Arcane Recovery", description: `Recovered ${maxRecoverLevels} slot levels`, value: maxRecoverLevels - remaining },
+      };
     }
     return {
       action, actorId: actor.id,
@@ -743,7 +1295,10 @@ function ordinalSuffix(n: number): string {
 
 function resolveDash(actor: Character, target: Character | undefined, arena: ArenaConfig): CombatResult {
   // Move toward the target (or nearest enemy) at 2x speed
-  const dashSpeed = actor.stats.speed * 2;
+  let effectiveSpeed = actor.stats.speed;
+  if (actor.statusEffects.some(e => e.type === "haste")) effectiveSpeed *= 2;
+  if (actor.statusEffects.some(e => e.type === "slow")) effectiveSpeed = Math.floor(effectiveSpeed / 2);
+  const dashSpeed = effectiveSpeed * 2;
 
   if (target) {
     const dx = target.position.x - actor.position.x;
@@ -774,6 +1329,156 @@ function resolveDash(actor: Character, target: Character | undefined, arena: Are
     action: { type: "dash", actorId: actor.id },
     actorId: actor.id,
     narrative: `${actor.name} dashes but has nowhere to go!`,
+  };
+}
+
+function getAbilityMod(character: Character, ability: "str" | "dex"): number {
+  if (ability === "str") return Math.floor((character.stats.str - 10) / 2);
+  return Math.floor((character.stats.dex - 10) / 2);
+}
+
+function resolveGrapple(
+  actor: Character,
+  target: Character | undefined,
+  dice: DiceRoller,
+  _allCharacters: Character[],
+): CombatResult {
+  if (!target) {
+    return {
+      action: { type: "grapple", actorId: actor.id },
+      actorId: actor.id,
+      narrative: `${actor.name} tries to grapple but has no target!`,
+    };
+  }
+
+  const dist = distance(actor.position, target.position);
+  if (dist > 5) {
+    return {
+      action: { type: "grapple", actorId: actor.id, targetId: target.id },
+      actorId: actor.id,
+      narrative: `${actor.name} tries to grapple ${target.name} but they're too far away! (${dist.toFixed(0)}ft)`,
+    };
+  }
+
+  // Grapple: Athletics (STR) vs Athletics/Acrobatics (target chooses)
+  // We simplify: attacker uses STR (Athletics), defender uses higher of STR or DEX
+  const actorMod = getAbilityMod(actor, "str") + actor.stats.proficiencyBonus;
+  const targetStrMod = getAbilityMod(target, "str") + target.stats.proficiencyBonus;
+  const targetDexMod = getAbilityMod(target, "dex") + target.stats.proficiencyBonus;
+  const targetMod = Math.max(targetStrMod, targetDexMod);
+
+  const { result: actorRoll } = dice.d20WithAdvantage(
+    "normal", `${actor.name} grapple attempt (Athletics)`
+  );
+  const { result: targetRoll } = dice.d20WithAdvantage(
+    "normal", `${target.name} grapple resist (Athletics/Acrobatics)`
+  );
+
+  const actorTotal = actorRoll + actorMod;
+  const targetTotal = targetRoll + targetMod;
+
+  if (actorTotal >= targetTotal) {
+    // Apply grappled condition to target
+    target.statusEffects.push({
+      type: "grappled",
+      turnsRemaining: 10, // lasts until escap d or grapp ler drops
+      potency: 0,
+      sourceId: actor.id,
+    });
+    return {
+      action: { type: "grapple", actorId: actor.id, targetId: target.id },
+      actorId: actor.id,
+      narrative: `${actor.name} grapples ${target.name}! (${actorTotal} vs ${targetTotal}) ${target.name}'s speed is now 0.`,
+      spell: { slotUsed: 0, statusApplied: "grappled", spellName: "Grapple", cooldownRemaining: 0 },
+    };
+  }
+
+  return {
+    action: { type: "grapple", actorId: actor.id, targetId: target.id },
+    actorId: actor.id,
+    narrative: `${actor.name} tries to grapple ${target.name} but fails! (${actorTotal} vs ${targetTotal})`,
+  };
+}
+
+function resolveShove(
+  actor: Character,
+  target: Character | undefined,
+  dice: DiceRoller,
+  _allCharacters: Character[],
+): CombatResult {
+  if (!target) {
+    return {
+      action: { type: "shove", actorId: actor.id },
+      actorId: actor.id,
+      narrative: `${actor.name} tries to shove but has no target!`,
+    };
+  }
+
+  const dist = distance(actor.position, target.position);
+  if (dist > 5) {
+    return {
+      action: { type: "shove", actorId: actor.id, targetId: target.id },
+      actorId: actor.id,
+      narrative: `${actor.name} tries to shove ${target.name} but they're too far away! (${dist.toFixed(0)}ft)`,
+    };
+  }
+
+  // Shove: Athletics (STR) vs Athletics/Acrobatics (target chooses)
+  const actorMod = getAbilityMod(actor, "str") + actor.stats.proficiencyBonus;
+  const targetStrMod = getAbilityMod(target, "str") + target.stats.proficiencyBonus;
+  const targetDexMod = getAbilityMod(target, "dex") + target.stats.proficiencyBonus;
+  const targetMod = Math.max(targetStrMod, targetDexMod);
+
+  const { result: actorRoll } = dice.d20WithAdvantage(
+    "normal", `${actor.name} shove attempt (Athletics)`
+  );
+  const { result: targetRoll } = dice.d20WithAdvantage(
+    "normal", `${target.name} shove resist (Athletics/Acrobatics)`
+  );
+
+  const actorTotal = actorRoll + actorMod;
+  const targetTotal = targetRoll + targetMod;
+
+  if (actorTotal >= targetTotal) {
+    // Push target 5ft away and knock prone
+    const dx = target.position.x - actor.position.x;
+    const dy = target.position.y - actor.position.y;
+    const d = Math.sqrt(dx * dx + dy * dy) || 1;
+    const from = { ...target.position };
+    target.position = {
+      x: Math.max(0, Math.min(100, target.position.x + Math.round(dx / d * 5))),
+      y: Math.max(0, Math.min(60, target.position.y + Math.round(dy / d * 5))),
+    };
+
+    // Remove any existing grapple on target from this actor (they're pushed away)
+    target.statusEffects = target.statusEffects.filter(
+      e => !(e.type === "grappled" && e.sourceId === actor.id)
+    );
+
+    // Apply prone
+    target.statusEffects.push({
+      type: "prone",
+      turnsRemaining: 10, // lasts until target spends half move to stand
+      potency: 0,
+      sourceId: actor.id,
+    });
+
+    const pushedDist = Math.round(Math.sqrt(
+      (target.position.x - from.x) ** 2 + (target.position.y - from.y) ** 2,
+    ) * 10) / 10;
+
+    return {
+      action: { type: "shove", actorId: actor.id, targetId: target.id },
+      actorId: actor.id,
+      narrative: `${actor.name} shoves ${target.name} ${pushedDist}ft and knocks them prone! (${actorTotal} vs ${targetTotal})`,
+      spell: { slotUsed: 0, statusApplied: "prone", spellName: "Shove", cooldownRemaining: 0 },
+    };
+  }
+
+  return {
+    action: { type: "shove", actorId: actor.id, targetId: target.id },
+    actorId: actor.id,
+    narrative: `${actor.name} tries to shove ${target.name} but fails! (${actorTotal} vs ${targetTotal})`,
   };
 }
 
@@ -829,7 +1534,21 @@ export function resolveMove(
   move: MoveVector,
   arena: ArenaConfig,
 ): MoveResult {
-  const maxDist = maxMovePerTurn(character.stats.speed);
+  // Grappled characters can't move
+  if (character.statusEffects.some(e => e.type === "grappled")) {
+    return {
+      from: { ...character.position },
+      to: { ...character.position },
+      distanceMoved: 0,
+    };
+  }
+
+  // Calculate effective speed with status modifiers
+  let effectiveSpeed = character.stats.speed;
+  if (character.statusEffects.some(e => e.type === "haste")) effectiveSpeed *= 2;
+  if (character.statusEffects.some(e => e.type === "slow")) effectiveSpeed = Math.floor(effectiveSpeed / 2);
+
+  const maxDist = maxMovePerTurn(effectiveSpeed);
 
   // Cunning Action: rogues get +15ft movement
   const hasCunningAction = character.features.some(f => f.id === "cunning_action");
@@ -877,7 +1596,22 @@ export function inRange(actor: Character, target: Character, range: number): boo
 export function processStatusEffects(character: Character): string[] {
   const narratives: string[] = [];
 
+  // Prone: auto-stand at cost of half movement (simplified 5e)
+  const proneEffect = character.statusEffects.find(e => e.type === "prone");
+  if (proneEffect) {
+    character.stats.speed = Math.floor(character.stats.speed / 2);
+    narratives.push(`${character.name} stands up from prone (costs half movement).`);
+    // Remove prone after standing
+    character.statusEffects = character.statusEffects.filter(e => e.type !== "prone");
+  }
+
   character.statusEffects = character.statusEffects.filter((effect) => {
+    // Grappled: remove if grappler is dead or no longer adjacent
+    if (effect.type === "grappled") {
+      // Keep grappled — it persists until escape or grappler is incapacitated
+      // The grapple check happens elsewhere; just keep ticking
+    }
+
     if (effect.type === "burn") {
       character.stats.hp = Math.max(0, character.stats.hp - effect.potency);
       narratives.push(`${character.name} takes ${effect.potency} burn damage!`);
@@ -927,6 +1661,7 @@ export function resolveAction(
   action: CombatAction,
   dice: DiceRoller,
   arena?: ArenaConfig,
+  allCharacters: Character[] = [],
 ): CombatResult {
   // Resolve move first (if any)
   let moveResult: MoveResult | undefined;
@@ -934,17 +1669,35 @@ export function resolveAction(
     moveResult = resolveMove(actor, action.move, arena);
   }
 
+  // Track invisibility before main action
+  const wasInvisibleBefore = actor.statusEffects.some(e => e.type === "invisible");
+
   let result: CombatResult;
 
   switch (action.type) {
     case "attack":
       if (!target) return { action, actorId: actor.id, narrative: "No target!" };
-      result = resolveAttack(actor, target, action, dice);
+      result = resolveAttack(actor, target, action, dice, allCharacters, arena);
       break;
 
     case "cast_spell":
       if (!target) return { action, actorId: actor.id, narrative: "No target!" };
-      result = resolveSpell(actor, target, action, dice);
+      result = resolveSpell(actor, target, action, dice, arena);
+      // ── AoE: hit additional targets within radius ──
+      if (action.spellId) {
+        const spell = actor.spells.find(s => s.id === action.spellId);
+        if (spell?.aoeRadius && spell.aoeRadius > 0 && allCharacters.length > 0) {
+          const primaryPos = target.position;
+          const aoeTargets = allCharacters.filter(c =>
+            c.id !== actor.id && c.id !== target.id && c.stats.hp > 0 &&
+            distance(c.position, primaryPos) <= (spell.aoeRadius || 0),
+          );
+          for (const aoeTarget of aoeTargets) {
+            const aoeResult = resolveSpell(actor, aoeTarget, action, dice, arena);
+            result.narrative += ` [AoE: ${aoeResult.narrative}]`;
+          }
+        }
+      }
       break;
 
     case "use_item":
@@ -971,6 +1724,14 @@ export function resolveAction(
       result = resolveDash(actor, target, arena || { width: 100, height: 60, label: "Arena" });
       break;
 
+    case "grapple":
+      result = resolveGrapple(actor, target, dice, allCharacters);
+      break;
+
+    case "shove":
+      result = resolveShove(actor, target, dice, allCharacters);
+      break;
+
     default:
       result = {
         action, actorId: actor.id,
@@ -991,8 +1752,443 @@ export function resolveAction(
     actor.isDefending = false;
   }
 
+  // Resolve bonus action if present
+  if (action.bonusAction) {
+    const bonusResult = resolveBonusAction(actor, target, action.bonusAction, dice, allCharacters);
+    // Append bonus action narrative to the main result
+    result.narrative += ` [BONUS: ${bonusResult.narrative}]`;
+    // If bonus action dealt damage, update the main result's damage
+    if (bonusResult.damage) {
+      if (result.damage) {
+        // Both dealt damage — combine
+        result.damage.damage += bonusResult.damage.damage;
+        result.damage.damageRolls = [...(result.damage.damageRolls || []), ...(bonusResult.damage.damageRolls || [])];
+      } else {
+        result.damage = bonusResult.damage;
+      }
+    }
+    if (bonusResult.heal) {
+      result.heal = bonusResult.heal;
+    }
+  }
+
+  // ── Invisibility breaks on attack or spell cast ──
+  // Only breaks if actor was invisible *before* the action started
+  if (wasInvisibleBefore && (action.type === "attack" || action.type === "cast_spell")) {
+    const invIdx = actor.statusEffects.findIndex(e => e.type === "invisible");
+    if (invIdx >= 0) {
+      actor.statusEffects.splice(invIdx, 1);
+      result.narrative += ` ${actor.name}'s invisibility fades!`;
+    }
+  }
+
   return result;
 }
+
+// ═══════════════════════════════════════════════════════
+//  Bonus Action Resolution
+// ═══════════════════════════════════════════════════════
+
+export function resolveBonusAction(
+  actor: Character,
+  target: Character | undefined,
+  bonusAction: BonusAction,
+  dice: DiceRoller,
+  allCharacters: Character[] = [],
+): CombatResult {
+  switch (bonusAction.type) {
+    case "off_hand_attack": {
+      // Can't use off-hand with two-handed weapons
+      if (actor.weapon.properties.includes("two-handed")) {
+        return { action: { type: "wait", actorId: actor.id }, actorId: actor.id, narrative: `${actor.name} can't make an off-hand attack with a two-handed weapon!` };
+      }
+      // Two-Weapon Fighting: off-hand light weapon attack (no ability mod to damage)
+      const offTarget = bonusAction.targetId
+        ? allCharacters.find(c => c.id === bonusAction.targetId) || target
+        : target;
+      if (!offTarget) return { action: { type: "wait", actorId: actor.id }, actorId: actor.id, narrative: "No off-hand target!" };
+      const dist = distance(actor.position, offTarget.position);
+      const weaponRange = actor.weapon.range;
+      if (dist > weaponRange) {
+        return { action: { type: "wait", actorId: actor.id }, actorId: actor.id, narrative: `Off-hand attack: ${offTarget.name} is too far away! (${dist.toFixed(0)}ft)` };
+      }
+      const roll = dice.d20(`${actor.name} off-hand attack`);
+      const total = roll + actor.stats.proficiencyBonus + abilityModifier(actor.stats[actor.weapon.abilityMod as AbilityName]);
+      const isCrit = roll === 20;
+      const isMiss = roll === 1 || total < offTarget.stats.ac;
+      let damageRolls: number[] = [];
+      let damage = 0;
+      if (!isMiss) {
+        const dmgResult = dice.rollDiceDetailed(actor.weapon.damageDice, `off-hand ${isCrit ? "crit" : "damage"}`);
+        damageRolls = isCrit ? [...dmgResult.rolls, ...dmgResult.rolls] : dmgResult.rolls;
+        // No ability modifier on off-hand damage UNLESS Two-Weapon Fighting style
+        damage = damageRolls.reduce((a, b) => a + b, 0);
+        if (actor.fightingStyle === "two_weapon_fighting") {
+          damage += abilityModifier(actor.stats[actor.weapon.abilityMod as AbilityName]);
+        }
+        offTarget.stats.hp = Math.max(0, offTarget.stats.hp - damage);
+      }
+      const narrative = isMiss
+        ? `${actor.name}'s off-hand attack misses ${offTarget.name}! (${total} vs AC ${offTarget.stats.ac})`
+        : `${actor.name}'s off-hand attack hits ${offTarget.name} for ${damage} damage!${isCrit ? " CRITICAL HIT!" : ""}`;
+      return {
+        action: { type: "attack", actorId: actor.id, targetId: offTarget.id },
+        actorId: actor.id,
+        targetId: offTarget?.id,
+        narrative,
+        damage: !isMiss ? { damage, wasCrit: !!isCrit, wasMiss: false, effective: "normal", targetHp: offTarget.stats.hp, targetMaxHp: offTarget.stats.maxHp, attackRoll: roll, attackTotal: total, targetAc: offTarget.stats.ac, damageRolls } : undefined,
+      };
+    }
+
+    case "healing_word": {
+      // Bonus action heal: 1d4 + WIS mod. Target specified by bonusAction.targetId or defaults to self
+      const healTarget = bonusAction.targetId
+        ? allCharacters.find(c => c.id === bonusAction.targetId) || actor
+        : actor;
+      const wisMod = abilityModifier(actor.stats.wis);
+      const healRoll = dice.d4("healing_word");
+      const amount = Math.max(1, healRoll + Math.max(0, wisMod));
+      healTarget.stats.hp = Math.min(healTarget.stats.maxHp, healTarget.stats.hp + amount);
+      return {
+        action: { type: "cast_spell", actorId: actor.id, targetId: healTarget.id, spellId: "healing_word" },
+        actorId: actor.id,
+        targetId: healTarget.id,
+        narrative: `${actor.name} casts Healing Word on ${healTarget.name}! Heals ${amount} HP. (${healRoll}+${Math.max(0, wisMod)})`,
+        heal: { amount, targetHp: healTarget.stats.hp, targetMaxHp: healTarget.stats.maxHp },
+      };
+    }
+
+    case "cunning_action": {
+      // Rogue bonus action: dash, disengage, or hide
+      const variant = bonusAction.variant || "dash";
+      if (variant === "dash") {
+        actor.stats.speed = actor.stats.speed * 2;
+        return {
+          action: { type: "class_ability", actorId: actor.id, abilityId: "cunning_action" },
+          actorId: actor.id,
+          narrative: `${actor.name} uses Cunning Action to Dash! Speed doubled to ${actor.stats.speed}ft.`,
+        };
+      } else if (variant === "disengage") {
+        actor.statusEffects.push({ type: "disengaging", turnsRemaining: 1, potency: 0, sourceId: actor.id });
+        return {
+          action: { type: "class_ability", actorId: actor.id, abilityId: "cunning_action" },
+          actorId: actor.id,
+          narrative: `${actor.name} uses Cunning Action to Disengage! No attacks of opportunity.`,
+        };
+      } else {
+        actor.statusEffects.push({ type: "invisible", turnsRemaining: 1, potency: 0, sourceId: actor.id });
+        return {
+          action: { type: "class_ability", actorId: actor.id, abilityId: "cunning_action" },
+          actorId: actor.id,
+          narrative: `${actor.name} uses Cunning Action to Hide! Becomes invisible.`,
+        };
+      }
+    }
+
+    case "misty_step": {
+      const enemy = allCharacters.find(c => c.id !== actor.id && c.team !== actor.team && c.stats.hp > 0);
+      if (enemy && actor.position) {
+        const dx = enemy.position.x - actor.position.x;
+        const dy = enemy.position.y - actor.position.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 0) {
+          const teleportDist = Math.min(30, dist);
+          actor.position.x = Math.round(Math.min(100, Math.max(0, actor.position.x + (dx / dist) * teleportDist)));
+          actor.position.y = Math.round(Math.min(60, Math.max(0, actor.position.y + (dy / dist) * teleportDist)));
+        }
+      }
+      return {
+        action: { type: "cast_spell", actorId: actor.id, spellId: "misty_step" },
+        actorId: actor.id,
+        narrative: `${actor.name} casts Misty Step and teleports up to 30ft!`,
+      };
+    }
+
+    default:
+      return {
+        action: { type: "wait", actorId: actor.id },
+        actorId: actor.id,
+        narrative: `${actor.name} considers a bonus action but does nothing.`,
+      };
+  }
+
+}
+
+// ═══════════════════════════════════════════════════════
+//  Reaction System — D&D 5e Reactions
+// ═══════════════════════════════════════════════════════
+
+/**
+ * Check if a movement triggers an Attack of Opportunity.
+ * In 5e, leaving an enemy's reach (moving from within to outside) provokes.
+ * Disengaging prevents this.
+ */
+export function checkOpportunityAttack(
+  mover: Character,
+  fromPos: Position,
+  toPos: Position,
+  enemies: Character[],
+  dice: DiceRoller,
+): ReactionResult | null {
+  // Disengaging prevents opportunity attacks
+  if (mover.statusEffects.some(e => e.type === "disengaging")) return null;
+  // Unconscious/dead characters don't get reactions
+  for (const enemy of enemies) {
+    if (enemy.stats.hp <= 0) continue;
+    if (enemy.reactionUsed) continue;
+
+    // Check if mover was within enemy's reach before moving
+    const distBefore = distance(fromPos, enemy.position);
+    const distAfter = distance(toPos, enemy.position);
+    const reach = enemy.weapon.range; // Weapon reach (5ft for melee)
+
+    // Moving FROM within reach TO outside reach = opportunity
+    if (distBefore <= reach && distAfter > reach) {
+      enemy.reactionUsed = true;
+
+      // Resolve the opportunity attack
+      const weapon = enemy.weapon;
+      const advantageMode = getAttackAdvantage(enemy, mover, [enemy, mover]);
+      const { result: roll } = dice.d20WithAdvantage(advantageMode, `${enemy.name} opportunity attack`);
+      const total = roll + getMod(enemy, weapon.abilityMod) + enemy.stats.proficiencyBonus;
+      const targetAc = getEffectiveAc(mover);
+      const isCrit = roll === 20;
+      const isHit = isCrit || (roll !== 1 && total >= targetAc);
+
+      let damage = 0;
+      let damageRolls: number[] = [];
+      if (isHit) {
+      const useVersatile = weapon.properties.includes("versatile") && !enemy.equippedShield;
+      const dmgResult = rollWeaponDamage(weapon, enemy, dice, isCrit, `${enemy.name} opportunity damage`, useVersatile);
+        damage = dmgResult.total;
+        damageRolls = dmgResult.rolls;
+        mover.stats.hp = Math.max(0, mover.stats.hp - damage);
+      }
+
+      const narrative = isHit
+        ? `${enemy.name} gets an Attack of Opportunity against ${mover.name}! Hits for ${damage} damage!`
+        : `${enemy.name} gets an Attack of Opportunity against ${mover.name} but misses! (${total} vs AC ${targetAc})`;
+
+      return {
+        triggered: true,
+        actorId: enemy.id,
+        type: "attack_of_opportunity",
+        narrative,
+        damage: !isHit ? undefined : {
+          damage, wasCrit: !!isCrit, wasMiss: false, effective: "normal",
+          targetHp: mover.stats.hp, targetMaxHp: mover.stats.maxHp,
+          attackRoll: roll, attackTotal: total, targetAc, damageRolls,
+        },
+      };
+    }
+  }
+  return null;
+}
+
+/**
+ * Check if a character can use Shield as a reaction when hit by an attack.
+ * Shield gives +5 AC until the start of the caster's next turn.
+ * In 5e, this is cast as a reaction — NOT an action.
+ */
+export function checkShieldReaction(
+  defender: Character,
+  _attackRoll: number,
+  attackTotal: number,
+): ReactionResult | null {
+  if (defender.reactionUsed) return null;
+  if (defender.stats.hp <= 0) return null;
+
+  const shieldSpell = defender.spells.find(s => s.id === "shield" && s.currentCooldown === 0);
+  if (!shieldSpell) return null;
+  if (!hasSpellSlot(defender.spellSlots, shieldSpell.level)) return null;
+
+  // Shield adds +5 AC — would the attack still hit?
+  const currentAc = getEffectiveAc(defender);
+  const shieldedAc = currentAc + 5;
+
+  if (attackTotal >= shieldedAc) {
+    // Even with shield, attack still hits — no point using it
+    return null;
+  }
+
+  // Shield would block this attack — use it!
+  defender.reactionUsed = true;
+  consumeSpellSlot(defender.spellSlots, shieldSpell.level);
+  shieldSpell.currentCooldown = shieldSpell.cooldown;
+
+  // Apply shield status effect (+5 AC for 1 round)
+  defender.statusEffects.push({
+    type: "shield",
+    turnsRemaining: 1,
+    potency: 5,
+    sourceId: defender.id,
+  });
+
+  return {
+    triggered: true,
+    actorId: defender.id,
+    type: "shield_spell",
+    narrative: `${defender.name} casts Shield as a reaction! +5 AC (${currentAc} → ${shieldedAc}), blocking the attack!`,
+    acBonus: 5,
+  };
+}
+
+/**
+ * Check if a rogue can use Uncanny Dodge as a reaction to halve damage.
+ * Uncanny Dodge is a Rogue level 5 class feature.
+ */
+export function checkUncannyDodge(
+  defender: Character,
+): ReactionResult | null {
+  if (defender.reactionUsed) return null;
+  if (defender.stats.hp <= 0) return null;
+
+  const hasUncannyDodge = defender.features.some(f => f.id === "uncanny_dodge" && f.usesRemaining > 0);
+  if (!hasUncannyDodge) return null;
+
+  defender.reactionUsed = true;
+  const feature = defender.features.find(f => f.id === "uncanny_dodge")!;
+  feature.usesRemaining--;
+
+  return {
+    triggered: true,
+    actorId: defender.id,
+    type: "uncanny_dodge",
+    narrative: `${defender.name} uses Uncanny Dodge! Damage halved!`,
+    damageHalved: true,
+  };
+}
+
+/**
+ * Apply reaction effects to damage — called after resolving an attack.
+ * Checks Shield (may negate the hit) and Uncanny Dodge (halve damage).
+ * Returns updated damage and any reaction narratives.
+ */
+export function applyDefensiveReactions(
+  defender: Character,
+  attackerTotal: number,
+  damage: number,
+): { damage: number; reactions: ReactionResult[]; hitBlocked: boolean } {
+  const reactions: ReactionResult[] = [];
+  let currentDamage = damage;
+  let hitBlocked = false;
+
+  // Check Shield reaction (may block the hit entirely)
+  const shieldReaction = checkShieldReaction(defender, 0, attackerTotal);
+  if (shieldReaction) {
+    reactions.push(shieldReaction);
+    hitBlocked = true;
+    currentDamage = 0;
+    return { damage: 0, reactions, hitBlocked: true };
+  }
+
+  // Check Uncanny Dodge (halve damage)
+  const uncannyReaction = checkUncannyDodge(defender);
+  if (uncannyReaction && currentDamage > 0) {
+    reactions.push(uncannyReaction);
+    currentDamage = Math.floor(currentDamage / 2);
+    // Refund the halved damage to defender's HP
+    defender.stats.hp = Math.min(defender.stats.maxHp, defender.stats.hp + Math.floor(damage / 2));
+  }
+
+  return { damage: currentDamage, reactions, hitBlocked };
+}
+
+/** Reset reaction flags at the start of a character's turn */
+export function resetReaction(character: Character): void {
+  character.reactionUsed = false;
+}
+
+// ═══════════════════════════════════════════════════════
+//  Death Saves — D&D 5e dying mechanic
+// ═══════════════════════════════════════════════════════
+
+/** Check if a character is dying (unconscious but not dead) */
+export function isDying(character: Character): boolean {
+  return character.stats.hp <= 0
+    && character.deathSaveFailures < 3
+    && character.deathSaveSuccesses < 3;
+}
+
+/** Check if a character is truly dead (3 death save failures) */
+export function isDead(character: Character): boolean {
+  return character.deathSaveFailures >= 3;
+}
+
+/** Check if a character is stable (3 death save successes, still at 0 HP) */
+export function isStable(character: Character): boolean {
+  return character.stats.hp <= 0 && character.deathSaveSuccesses >= 3;
+}
+
+/**
+ * Apply damage to a dying character — each hit = 1 failure, crit = 2 failures.
+ * Returns death save failure count added.
+ */
+export function applyDamageToDying(character: Character, isCritical: boolean): number {
+  const failures = isCritical ? 2 : 1;
+  character.deathSaveFailures += failures;
+  return failures;
+}
+
+/**
+ * Roll a death save for an unconscious character.
+ * d20: 10+ = success, 9- = failure.
+ * Nat 20 = regain 1 HP (conscious!).
+ * Nat 1 = 2 failures.
+ * Returns the roll result and outcome.
+ */
+export function rollDeathSave(character: Character, dice: DiceRoller): {
+  roll: number;
+  successes: number;
+  failures: number;
+  regainedHp: boolean;
+} {
+  const roll = dice.d20(`${character.name} death save`);
+  let successes = 0;
+  let failures = 0;
+  let regainedHp = false;
+
+  if (roll === 20) {
+    // Nat 20: regain 1 HP
+    character.stats.hp = 1;
+    character.deathSaveSuccesses = 0;
+    character.deathSaveFailures = 0;
+    regainedHp = true;
+    // Remove unconscious effect if present
+    character.statusEffects = character.statusEffects.filter(e => e.type !== "unconscious");
+  } else if (roll === 1) {
+    failures = 2;
+    character.deathSaveFailures += 2;
+  } else if (roll >= 10) {
+    successes = 1;
+    character.deathSaveSuccesses += 1;
+  } else {
+    failures = 1;
+    character.deathSaveFailures += 1;
+  }
+
+  return { roll, successes, failures, regainedHp };
+}
+
+/**
+ * Mark a character as unconscious (0 HP transition).
+ * Resets death saves and adds unconscious status.
+ */
+export function markUnconscious(character: Character): void {
+  character.stats.hp = 0;
+  character.deathSaveSuccesses = 0;
+  character.deathSaveFailures = 0;
+  // Add unconscious status if not already present
+  if (!character.statusEffects.some(e => e.type === "unconscious")) {
+    character.statusEffects.push({
+      type: "unconscious",
+      turnsRemaining: 99, // indefinite
+      potency: 0,
+      sourceId: "death",
+    });
+  }
+}
+
 
 // ═══════════════════════════════════════════════════════
 //  Turn Order — DEX initiative
@@ -1052,6 +2248,8 @@ export function createSnapshot(
         damageDice: s.damageDice, healDice: s.healDice,
         attackRoll: s.attackRoll, saveAbility: s.saveAbility,
         statusEffect: s.statusEffect,
+        bonusAction: s.bonusAction,
+        aoeRadius: s.aoeRadius,
       })),
       inventory: c.inventory.map(i => ({
         id: i.id, name: i.name, description: i.description,
@@ -1063,9 +2261,20 @@ export function createSnapshot(
       })),
       weapon: {
         name: c.weapon.name, damageDice: c.weapon.damageDice,
+        versatileDice: c.weapon.versatileDice,
         abilityMod: c.weapon.abilityMod, range: c.weapon.range,
       },
       savingThrowProfs: [...c.savingThrowProfs],
+      fightingStyle: c.fightingStyle,
+      equippedShield: c.equippedShield,
+      concentrationSpellId: c.concentrationSpellId,
+      reactionUsed: c.reactionUsed,
+      deathSaveSuccesses: c.deathSaveSuccesses,
+      deathSaveFailures: c.deathSaveFailures,
+      layOnHandsPool: c.layOnHandsPool,
+      resistances: [...c.resistances],
+      vulnerabilities: [...c.vulnerabilities],
+      immunities: [...c.immunities],
     })),
     turnNumber,
     phase,

@@ -33,7 +33,7 @@ describe("createCharacter", () => {
     expect(m.spellSlots[3]).toEqual({ total: 2, used: 0 });
 
     // 8 spells
-    expect(m.spells).toHaveLength(8);
+    expect(m.spells).toHaveLength(16);
     expect(m.spells.map(s => s.id)).toContain("fire_bolt");
     expect(m.spells.map(s => s.id)).toContain("fireball");
   });
@@ -112,9 +112,9 @@ describe("createCharacter", () => {
 });
 
 describe("ALL_SPELLS", () => {
-  it("has all 10 spells", () => {
+  it("has all 12 spells", () => {
     const ids = Object.keys(ALL_SPELLS);
-    expect(ids).toHaveLength(10);
+    expect(ids).toHaveLength(25);
   });
 
   it("each spell has required fields", () => {
@@ -123,7 +123,7 @@ describe("ALL_SPELLS", () => {
       expect(spell.name).toBeTruthy();
       expect(spell.level).toBeGreaterThanOrEqual(0);
       expect(spell.range).toBeGreaterThanOrEqual(0);
-      expect(["damage", "heal", "buff"]).toContain(spell.type);
+      expect(["damage", "heal", "buff", "control"]).toContain(spell.type);
       expect(["enemy", "self"]).toContain(spell.target);
       expect(spell.castingAbility).toBeTruthy();
     }
@@ -132,7 +132,7 @@ describe("ALL_SPELLS", () => {
   it("fire_bolt is a cantrip (level 0)", () => {
     expect(ALL_SPELLS.fire_bolt.level).toBe(0);
     expect(ALL_SPELLS.fire_bolt.attackRoll).toBe(true);
-    expect(ALL_SPELLS.fire_bolt.damageDice).toBe("2d10");
+    expect(ALL_SPELLS.fire_bolt.damageDice).toBe("3d10");
   });
 
   it("fireball is level 3 with DEX save", () => {

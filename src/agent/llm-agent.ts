@@ -107,6 +107,7 @@ export class LLMAgent implements IAgent {
 
   // Thinking step collection per turn
   private _pendingThinkingSteps: ThinkingStep[] = [];
+  private _pendingBonusAction: CombatAction["bonusAction"] = undefined;
 
   /** Callback for streaming thinking steps to UI */
   onThinking?: (step: ThinkingStep) => void;
@@ -307,6 +308,7 @@ export class LLMAgent implements IAgent {
 
     // Clear stale thinking from previous turn
     this._pendingThinkingSteps = [];
+    this._pendingBonusAction = undefined;
 
     try {
       this.turnActive = true;
@@ -570,10 +572,11 @@ export class LLMAgent implements IAgent {
       {
         name: "attack",
         label: "Attack",
-        description: "Basic melee attack. Range 1.5. Optionally move first by providing move_dx/move_dy.",
+        description: "Basic melee attack. Range 1.5. Optionally move first by providing move_dx/move_dy. Paladins can smite (bonus radiant damage, uses spell slot) with smite=true.",
         promptSnippet: "Attack the enemy",
         parameters: Type.Object({
           target: Type.String({ description: "Character name to attack (e.g. 'Alpha', 'Beta')" }),
+          smite: Type.Optional(Type.Boolean({ description: "(Paladin only) Add Divine Smite: +2d8 radiant damage. Uses a spell slot. Use when you want burst damage." })),
           move_dx: Type.Optional(Type.Number({ description: "Move this much in X before attacking (0 = no move)" })),
           move_dy: Type.Optional(Type.Number({ description: "Move this much in Y before attacking (0 = no move)" })),
         }),
@@ -584,6 +587,7 @@ export class LLMAgent implements IAgent {
             type: "attack",
             actorId: this.id,
             targetId: t.id,
+            abilityId: params.smite ? "divine_smite" : undefined,
             move: (params.move_dx || params.move_dy) ? { dx: params.move_dx || 0, dy: params.move_dy || 0 } : undefined,
           });
         },
@@ -697,6 +701,62 @@ export class LLMAgent implements IAgent {
           });
         },
       },
+      {
+        name: "grapple",
+        label: "Grapple",
+        description: "Attempt to grapple a creature within 5ft. STR (Athletics) contest vs their Athletics/Acrobatics. Success sets their speed to 0.",
+        promptSnippet: "Grapple the enemy to prevent movement",
+        parameters: Type.Object({
+          target: Type.String({ description: "The enemy to grapple (must be within 5ft)." }),
+        }),
+        execute: async (_id: any, params: any) => {
+          const tgt = this.resolveTarget(params.target);
+          return this.commitAction({
+            type: "grapple",
+            actorId: this.id,
+            targetId: tgt?.id || this.enemyId,
+          });
+        },
+      },
+      {
+        name: "shove",
+        label: "Shove",
+        description: "Attempt to shove a creature within 5ft. STR (Athletics) contest vs their Athletics/Acrobatics. Success pushes 5ft and knocks prone.",
+        promptSnippet: "Shove the enemy to knock them prone",
+        parameters: Type.Object({
+          target: Type.String({ description: "The enemy to shove (must be within 5ft)." }),
+        }),
+        execute: async (_id: any, params: any) => {
+          const tgt = this.resolveTarget(params.target);
+          return this.commitAction({
+            type: "shove",
+            actorId: this.id,
+            targetId: tgt?.id || this.enemyId,
+          });
+        },
+      },
+      {
+        name: "bonus_action",
+        label: "Bonus Action",
+        description: "Use your bonus action this turn. Call this BEFORE your main action (attack, cast_spell, etc). You get one bonus action per turn. Options: healing_word (1d4+WIS heal), cunning_action (rogue: dash/disengage/hide), misty_step (teleport 30ft), off_hand_attack (extra weapon attack, no modifier).",
+        promptSnippet: "Use bonus action (healing_word, cunning_action, misty_step)",
+        parameters: Type.Object({
+          bonus_type: Type.String({ description: "Which bonus action: healing_word, cunning_action, misty_step, off_hand_attack" }),
+          variant: Type.Optional(Type.String({ description: "For cunning_action: dash, disengage, or hide" })),
+          target: Type.Optional(Type.String({ description: "Target name for healing_word or off_hand_attack" })),
+        }),
+        execute: async (_id: any, params: any) => {
+          const bonusAction: Record<string, string> = { type: params.bonus_type };
+          if (params.variant) bonusAction.variant = params.variant;
+          if (params.target) {
+            const t = this.resolveTarget(params.target);
+            if (t) bonusAction.targetId = t.id;
+            else bonusAction.targetId = this.id; // self
+          }
+          this._pendingBonusAction = bonusAction as any;
+          return { content: [{ type: "text" as const, text: `Bonus action queued: ${params.bonus_type}. Now use your main action (attack, cast_spell, etc).` }], details: {} };
+        },
+      },
     ];
   }
 
@@ -712,6 +772,12 @@ export class LLMAgent implements IAgent {
     this.session?.abort().catch(() => {});
 
     console.error(`[${this.name}] ✓ commitAction: ${action.type}`);
+
+    // Attach pending bonus action if queued
+    if (this._pendingBonusAction) {
+      action.bonusAction = this._pendingBonusAction;
+      this._pendingBonusAction = undefined;
+    }
 
     // Resolve the Promise in getAction() — this unblocks getAction()
     // which will then await _pendingPrompt to ensure full settlement.
@@ -786,6 +852,16 @@ You have two kinds of tools:
 - Use status effects strategically.
 - CHECK DISTANCE before attacking! Your move_dx/move_dy shifts you first, then range is checked from your new position.
 - NEVER waste a turn: if out of range, include movement to close the gap. If too far even after moving, use a long-range spell or item instead of melee.
+
+## BONUS ACTIONS
+You get ONE bonus action per turn alongside your main action. Use the \`bonus_action\` tool BEFORE your main action tool.
+- **healing_word** (paladin): 1d4+WIS heal as bonus action. Call bonus_action(bonus_type="healing_word", target="YourName"), then your main action.
+- **misty_step** (paladin): Teleport 30ft toward enemy. Call bonus_action(bonus_type="misty_step"), then attack from closer range.
+- **cunning_action** (rogue): Dash/Disengage/Hide as bonus action. Call bonus_action(bonus_type="cunning_action", variant="dash").
+- **off_hand_attack** (Two-Weapon Fighting): Extra weapon attack, no ability modifier to damage.
+
+Example: bonus_action(bonus_type="healing_word", target="YourName") → attack(target="Enemy")
+Example: bonus_action(bonus_type="cunning_action", variant="dash") → attack(target="Enemy")
 
 ${this.config.systemPrompt || ""}`;
   }

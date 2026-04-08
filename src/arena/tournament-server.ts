@@ -290,6 +290,58 @@ export function createTournamentApp(options: {
     res.json({ status: "reset" });
   });
 
+  // ── API: Retry a specific matchup from last tournament result ──
+  app.post("/api/tournament/retry/:matchupIdx", async (req, res) => {
+    if (isRunning) {
+      res.status(409).json({ error: "Tournament already running" });
+      return;
+    }
+    if (!currentResult) {
+      res.status(400).json({ error: "No completed tournament to retry from" });
+      return;
+    }
+    const idx = parseInt(req.params.matchupIdx, 10);
+    if (isNaN(idx) || idx < 0 || idx >= currentResult.matchups.length) {
+      res.status(400).json({ error: `Invalid matchup index ${idx}` });
+      return;
+    }
+    const matchup = currentResult.matchups[idx];
+
+    // Start a Bo1 quick duel for just this pair
+    const { bestOf, maxTurns, kFactor, agentFactory, outputDir } = currentResult.config;
+    const runner = new TournamentRunner({
+      models: [matchup.modelA, matchup.modelB],
+      bestOf: bestOf || 1,
+      maxTurns: maxTurns || 30,
+      kFactor: kFactor || 32,
+      agentFactory: agentFactory || undefined,
+      outputDir: outputDir || undefined,
+    });
+
+    // Wire event handlers
+    runner.onEvent((event: TournamentEvent) => {
+      broadcast(event);
+    });
+
+    isRunning = true;
+    aborted = false;
+    currentRunner = runner;
+    res.json({ status: "started", modelA: matchup.modelA, modelB: matchup.modelB });
+
+    try {
+      const result = await runner.run();
+      currentResult = result;
+      if (outputDir) {
+        try { saveTournamentReport(result, outputDir); } catch (_e) { /* ignore */ }
+      }
+    } catch (err: any) {
+      broadcast({ type: "tournament_aborted", reason: err.message });
+    } finally {
+      isRunning = false;
+      currentRunner = null;
+    }
+  });
+
   // ── API: Current status ──
   app.get("/api/tournament/status", (_req, res) => {
     res.json({

@@ -991,4 +991,51 @@ describe("Tournament Server Integration (testMode)", () => {
     await fetchJson("/api/tournament/abort", { method: "POST" });
     await new Promise(r => setTimeout(r, 500));
   }, 5000);
+
+  it("retry matchup endpoint re-runs a specific matchup", async () => {
+    // First, start and complete a tournament
+    await fetchJson("/api/tournament/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        models: ["Alice", "Bob", "Charlie"],
+        bestOf: 1,
+        includeHeuristic: false,
+        maxTurns: 50,
+      }),
+    });
+    // Wait for completion (poll status)
+    for (let i = 0; i < 50; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      const st = await fetchJson("/api/tournament/status");
+      if (!st.data?.isRunning && st.data?.result) break;
+    }
+    await new Promise(r => setTimeout(r, 100));
+
+    // Get result
+    const { data: statusData } = await fetchJson("/api/tournament/status");
+    expect(statusData.result).toBeDefined();
+    expect(statusData.result.matchups.length).toBeGreaterThanOrEqual(1);
+
+    // Retry first matchup
+    const { data: retryResp } = await fetchJson("/api/tournament/retry/0", { method: "POST" });
+    expect(retryResp.status).toBe("started");
+    expect(retryResp.modelA).toBeDefined();
+    expect(retryResp.modelB).toBeDefined();
+
+    // Wait for retry to complete
+    for (let i = 0; i < 50; i++) {
+      await new Promise(r => setTimeout(r, 100));
+      const st = await fetchJson("/api/tournament/status");
+      if (!st.data?.isRunning) break;
+    }
+    await new Promise(r => setTimeout(r, 100));
+  }, 15000);
+
+  it("retry returns 400 with invalid matchup index", async () => {
+    // No tournament result yet — reset first
+    await fetchJson("/api/tournament/reset", { method: "POST" });
+    const { data: resp } = await fetchJson("/api/tournament/retry/99", { method: "POST" });
+    expect(resp.error).toBeDefined();
+  });
 });

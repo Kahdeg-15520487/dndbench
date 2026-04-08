@@ -89,9 +89,53 @@ export class HeuristicAgent implements IAgent {
       return { type: "use_item", actorId: this.id, targetId: target.id, itemId: "bomb" };
     }
 
+    // ── Action Surge if in melee range and target alive ──
+    const actionSurge = me.features.find(f => f.id === "action_surge" && f.usesRemaining > 0);
+    if (actionSurge && dist <= MELEE_RANGE && target.hp > 0 && Math.random() > 0.3) {
+      return { type: "class_ability", actorId: this.id, abilityId: "action_surge" };
+    }
+
     // ── Cast damage spells (if we have slots for that level) ──
     const slots = totalRemainingSlots(me.spellSlots);
     if (slots > 0) {
+      // Try control spells first (Web) to restrain enemy
+      const controlSpells = me.spells
+        .filter(s => s.type === "control" && s.currentCooldown === 0 && s.level > 0
+          && remainingSlots(me.spellSlots, s.level) > 0
+          && !target.statusEffects.some(e => e.type === "restrained"));
+      if (controlSpells.length > 0 && Math.random() > 0.6) {
+        const spell = controlSpells[0];
+        return withMove({
+          type: "cast_spell",
+          actorId: this.id,
+          targetId: target.id,
+          spellId: spell.id,
+        }, spell.range);
+      }
+
+      // Try Haste on self if healthy
+      const hasteSpell = me.spells.find(
+        s => s.id === "haste" && s.currentCooldown === 0 && remainingSlots(me.spellSlots, s.level) > 0
+          && !me.statusEffects.some(e => e.type === "haste")
+      );
+      if (hasteSpell && me.hp > me.maxHp * 0.7 && Math.random() > 0.7) {
+        return { type: "cast_spell", actorId: this.id, targetId: this.id, spellId: "haste" };
+      }
+
+      // Try Slow on enemy if they're not already slowed
+      const slowSpell = me.spells.find(
+        s => s.id === "slow" && s.currentCooldown === 0 && remainingSlots(me.spellSlots, s.level) > 0
+          && !target.statusEffects.some(e => e.type === "slow")
+      );
+      if (slowSpell && Math.random() > 0.6) {
+        return withMove({
+          type: "cast_spell",
+          actorId: this.id,
+          targetId: target.id,
+          spellId: "slow",
+        }, slowSpell.range);
+      }
+
       // Prioritize highest-level damage spells that we have slots for
       const dmgSpells = me.spells
         .filter(s => s.type === "damage" && s.currentCooldown === 0 && s.level > 0
@@ -157,11 +201,48 @@ export class HeuristicAgent implements IAgent {
       return { type: "dash", actorId: this.id, targetId: target.id };
     }
 
-    // ── Default: weapon attack ──
-    return withMove(
-      { type: "attack", actorId: this.id, targetId: target.id },
-      MELEE_RANGE,
-    );
+    // ── Shove if in melee and target isn't prone (for advantage) ──
+    if (dist <= MELEE_RANGE && !target.statusEffects.some(e => e.type === "prone")
+        && Math.random() > 0.85) {
+      return { type: "shove", actorId: this.id, targetId: target.id };
+    }
+
+    // ── Grapple enemy spellcasters to prevent movement ──
+    if (dist <= MELEE_RANGE && !target.statusEffects.some(e => e.type === "grappled")
+        && target.ac >= 14 && Math.random() > 0.9) {
+      return { type: "grapple", actorId: this.id, targetId: target.id };
+    }
+
+    // ── Default: weapon attack (with optional bonus action) ──
+    const baseAction: CombatAction = { type: "attack", actorId: this.id, targetId: target.id };
+
+    // Paladin: Divine Smite when in melee, target alive, and has spell slots
+    const canSmite = me.features.some(f => f.id === "divine_smite") && dist <= MELEE_RANGE;
+    if (canSmite && totalRemainingSlots(me.spellSlots) > 0 && target.hp > 0 && Math.random() > 0.3) {
+      baseAction.abilityId = "divine_smite";
+    }
+
+    // Paladin: Healing Word as bonus action when wounded
+    const hwSpell = me.spells.find(s => s.id === "healing_word" && s.bonusAction
+      && s.currentCooldown === 0 && remainingSlots(me.spellSlots, s.level) > 0);
+    if (hwSpell && me.hp < me.maxHp * 0.7 && Math.random() > 0.4) {
+      baseAction.bonusAction = { type: "healing_word", targetId: this.id };
+    }
+
+    // Paladin: Misty Step when far from target
+    const msSpell = me.spells.find(s => s.id === "misty_step" && s.bonusAction
+      && s.currentCooldown === 0 && remainingSlots(me.spellSlots, s.level) > 0);
+    if (msSpell && dist > MELEE_RANGE * 2 && !baseAction.bonusAction && Math.random() > 0.5) {
+      baseAction.bonusAction = { type: "misty_step" };
+    }
+
+    // Rogue: Cunning Action when out of range (dash to close distance, still use action to attack)
+    const cunningAction = me.features.find(f => f.id === "cunning_action");
+    if (cunningAction && dist > MELEE_RANGE && !baseAction.bonusAction && Math.random() > 0.4) {
+      baseAction.bonusAction = { type: "cunning_action", variant: "dash" };
+    }
+
+    return withMove(baseAction, MELEE_RANGE);
   }
 
   private pickTarget(

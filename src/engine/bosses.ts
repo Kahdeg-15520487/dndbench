@@ -199,5 +199,14 @@ export function createBoss(
     isDefending: false,
     actionHistory: [],
     position: { ...position },
+    concentrationSpellId: undefined,
+    reactionUsed: false,
+    deathSaveSuccesses: 0,
+    deathSaveFailures: 0,
+    layOnHandsPool: 0,
+    equippedShield: false,
+    resistances: [],
+    vulnerabilities: [],
+    immunities: [],
   };
 }

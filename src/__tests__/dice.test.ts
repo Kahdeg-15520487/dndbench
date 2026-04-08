@@ -220,4 +220,34 @@ describe("DiceRoller", () => {
     dice.d20("c");
     expect(dice.getRollCount()).toBe(1);
   });
+
+  it("d20WithAdvantage normal mode rolls one die", () => {
+    const dice = new DiceRoller(42);
+    const result = dice.d20WithAdvantage("normal", "test");
+    expect(result.result).toBeGreaterThanOrEqual(1);
+    expect(result.result).toBeLessThanOrEqual(20);
+    expect(result.discarded).toBeUndefined();
+    expect(dice.getRollCount()).toBe(1);
+  });
+
+  it("d20WithAdvantage advantage takes higher", () => {
+    // Use same seed for both rollers — advantage should take the max of two rolls
+    const dice2 = new DiceRoller(42);
+    const r2a = dice2.d20("roll1");
+    const r2b = dice2.d20("roll2");
+    const dice3 = new DiceRoller(42);
+    const result = dice3.d20WithAdvantage("advantage", "test");
+    expect(result.result).toBe(Math.max(r2a, r2b));
+    expect(dice3.getRollCount()).toBe(2);
+  });
+
+  it("d20WithAdvantage disadvantage takes lower", () => {
+    const dice2 = new DiceRoller(42);
+    const r2a = dice2.d20("roll1");
+    const r2b = dice2.d20("roll2");
+    const dice3 = new DiceRoller(42);
+    const result = dice3.d20WithAdvantage("disadvantage", "test");
+    expect(result.result).toBe(Math.min(r2a, r2b));
+    expect(dice3.getRollCount()).toBe(2);
+  });
 });

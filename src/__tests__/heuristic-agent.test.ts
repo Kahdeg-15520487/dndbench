@@ -22,10 +22,16 @@ function makeSnapshot(
     statusEffects: any[];
     isDefending: boolean;
     savingThrowProfs: string[];
+    concentrationSpellId?: string;
+    resistances?: string[];
+    vulnerabilities?: string[];
+    immunities?: string[];
   }[]
 ): BattleStateSnapshot {
   return {
-    characters: chars,
+    characters: chars.map(c => ({
+      resistances: [], vulnerabilities: [], immunities: [], concentrationSpellId: undefined, reactionUsed: false, deathSaveSuccesses: 0, deathSaveFailures: 0, layOnHandsPool: 25, equippedShield: false, ...c,
+    })),
     turnNumber: 1,
     phase: "ongoing",
     arena: ARENA_PRESETS.medium,
@@ -74,7 +80,7 @@ describe("HeuristicAgent", () => {
     const action = await agent.getAction(snapshot);
 
     // Warrior in melee range with full HP typically attacks or defends
-    expect(["attack", "defend"]).toContain(action.type);
+    expect(["attack", "defend", "shove", "grapple"]).toContain(action.type);
     expect(action.actorId).toBe("w1");
   });
 
