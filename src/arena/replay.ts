@@ -59,7 +59,6 @@ function renderMarkdown(
   gifPath?: string
 ): string {
   const lines: string[] = [];
-  const agentMap = new Map(agents.map((a) => [a.id, a]));
   const charMap = new Map(characters.map((c) => [c.id, c]));
 
   // Title — list all character names
@@ -253,7 +252,7 @@ function renderMarkdown(
 function buildPath(
   log: BattleLog,
   characters: Character[],
-  agents: IAgent[],
+  _agents: IAgent[],
   dir: string
 ): string {
   const ts = new Date(log.startTime)
@@ -290,15 +289,9 @@ function agentLabel(agent?: IAgent): string {
     heuristic: "🤖 Heuristic",
     llm: "🧠 LLM",
     human: "👤 Human",
+    boss: "👹 Boss",
   };
   return labels[agent.type] || agent.type;
-}
-
-function truncate(val: any, maxLen: number): string {
-  const str = typeof val === "string" ? val : JSON.stringify(val);
-  if (!str) return "";
-  if (str.length <= maxLen) return str;
-  return str.slice(0, maxLen - 3) + "...";
 }
 
 // ── Battlefield Image Generation ───────────────────────
@@ -312,7 +305,7 @@ import {
 
 function generateBattlefieldImages(
   log: BattleLog,
-  characters: Character[],
+  _characters: Character[],
   imagesDir: string
 ): Map<string, string> {
   fs.mkdirSync(imagesDir, { recursive: true });
@@ -364,11 +357,10 @@ function generateBattlefieldImages(
 // ── Animated GIF Generation ────────────────────────────
 
 import GIFEncoder from "gif-encoder-2";
-import { createCanvas, loadImage } from "canvas";
 
 function generateBattlefieldGif(
   log: BattleLog,
-  characters: Character[],
+  _characters: Character[],
   imagesDir: string
 ): string | undefined {
   // Collect all frames
@@ -389,49 +381,9 @@ function generateBattlefieldGif(
 
   if (frames.length === 0) return undefined;
 
-  // Render each frame to a canvas, then feed to GIF encoder
   const WIDTH = 560;
   const HEIGHT = 280;
 
-  const gif = new GIFEncoder(WIDTH, HEIGHT, "neuquant", true);
-  gif.start();
-  gif.setRepeat(0); // loop forever
-  gif.setDelay(1200); // 1.2s per frame
-  gif.setQuality(10); // 1=best, 20=fast
-
-  for (const frame of frames) {
-    const bfChars: BattlefieldCharacter[] = frame.snapshot.characters.map((c: any) => ({
-      id: c.id,
-      name: c.name,
-      team: c.team,
-      hp: c.hp,
-      maxHp: c.maxHp,
-      ac: c.ac,
-      
-      position: c.position,
-      statusEffects: c.statusEffects?.map((e: any) => typeof e === "string" ? e : e.type) ?? [],
-      isDefending: c.isDefending,
-    }));
-
-    const bfFrame: BattlefieldFrame = {
-      arena: log.arena,
-      characters: bfChars,
-      moveTrail: frame.move
-        ? { actorId: frame.actorId, from: frame.move.from, to: frame.move.to }
-        : undefined,
-      turnNumber: frame.turnNumber,
-      actorId: frame.actorId,
-    };
-
-    // Render the frame to a PNG buffer, then load it onto a canvas for GIF encoding
-    const buf = renderBattlefield(bfFrame, WIDTH, HEIGHT);
-    const img = loadImage(buf);
-    // gif-encoder-2 expects a Canvas context; we'll use a workaround
-    // since loadImage is sync in node-canvas — actually it's async
-  }
-
-  // Since loadImage is async, let's use a synchronous approach:
-  // render directly to a canvas instead of PNG → load → canvas
   return generateBattlefieldGifSync(log, frames, imagesDir, WIDTH, HEIGHT);
 }
 

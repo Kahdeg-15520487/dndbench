@@ -12,12 +12,14 @@
 // ─────────────────────────────────────────────────────────
 
 import { createCharacter } from "./engine/characters.js";
-import { createBoss, getBossProfile, getAllBosses, BOSS_ORDER } from "./engine/bosses.js";
+import { createBoss, getBossProfile, BOSS_ORDER } from "./engine/bosses.js";
 import { HeuristicAgent, LLMAgent, BossAgent } from "./agent/index.js";
 import type { IAgent } from "./agent/index.js";
 import { BattleRunner } from "./arena/battle-runner.js";
 import { createCliRenderer, createCliThinkingHandler, printBattleSummary } from "./arena/cli-renderer.js";
 import { saveReplay } from "./arena/replay.js";
+import { TournamentRunner } from "./arena/tournament.js";
+import { saveTournamentReport } from "./arena/tournament-report.js";
 import {
   type ParticipantConfig,
   type AgentType,
@@ -49,6 +51,18 @@ interface CliOptions {
   arena: string;                // --arena small|medium|large|boss_room|grand
   winCondition: string;         // --win last_team_standing|last_unit_standing
 
+  // Tournament flags
+  tournament: boolean;
+  tournamentModels: string[];   // --tournament-models "ModelA" "ModelB" ...
+  tournamentBestOf: number;
+  tournamentNoHeuristic: boolean;
+  tournamentKFactor: number;
+  tournamentOutputDir: string;
+
+  serveReports: boolean;
+  serveReportsPort: number;
+  testMode: boolean;
+
   maxTurns: number;
   delay: number;
   outputFile?: string;
@@ -70,6 +84,15 @@ function parseArgs(args: string[]): CliOptions {
     maxTurns: 30,
     delay: 1500,
     bossExam: false,
+    tournament: false,
+    tournamentModels: [],
+    tournamentBestOf: 5,
+    tournamentNoHeuristic: false,
+    tournamentKFactor: 32,
+    tournamentOutputDir: "tournament",
+    serveReports: false,
+    serveReportsPort: 8050,
+    testMode: false,
   };
 
   for (let i = 0; i < args.length; i++) {
@@ -94,6 +117,19 @@ function parseArgs(args: string[]): CliOptions {
           opts.participants.push(args[++i]);
         }
         break;
+      case "--tournament": opts.tournament = true; break;
+      case "--tournament-models": case "-tm":
+        while (i + 1 < args.length && !args[i + 1].startsWith("-")) {
+          opts.tournamentModels.push(args[++i]);
+        }
+        break;
+      case "--tournament-best-of": opts.tournamentBestOf = parseInt(args[++i]); break;
+      case "--tournament-no-heuristic": opts.tournamentNoHeuristic = true; break;
+      case "--tournament-k-factor": opts.tournamentKFactor = parseInt(args[++i]); break;
+      case "--tournament-output": opts.tournamentOutputDir = args[++i]; break;
+      case "--serve-reports": opts.serveReports = true; break;
+      case "--serve-reports-port": opts.serveReportsPort = parseInt(args[++i]); break;
+      case "--test-mode": opts.testMode = true; break;
       case "--help": case "-h":
         printHelp();
         process.exit(0);
@@ -143,6 +179,20 @@ Usage: npx tsx src/index.ts [options]
   --output, -o <file>     Save battle log to JSON file
   --help, -h              Show this help
 
+═══ Tournament Mode ═══
+
+  --tournament            Run ELO round-robin tournament
+  -tm, --tournament-models <model> [<model> ...]
+                          LLM models to compete (space-separated)
+  --tournament-best-of <n> Games per matchup (default: 5)
+  --tournament-no-heuristic  Exclude heuristic baseline
+  --tournament-k-factor <n> ELO K-factor (default: 32)
+  --tournament-output <dir> Output directory (default: tournament/)
+
+  --serve-reports          Start tournament web dashboard
+  --serve-reports-port <n> Port for web dashboard (default: 8050)
+  --test-mode              Use heuristic agents (no LLM needed) for dashboard testing
+
 Environment:
   LLM_API_KEY    API key (not needed for local providers like Ollama)
   LLM_BASE_URL   Base URL (default: https://api.openai.com/v1)
@@ -174,6 +224,12 @@ Examples:
 
   # Boss exam
   npx tsx src/index.ts --boss-exam --a1-class mage --mode llm --a1-model qwen3
+
+  # Tournament: 3 models + heuristic baseline, best of 5
+  npx tsx src/index.ts --tournament -tm gemma-4-26b qwen3 cydonia-24b
+
+  # Tournament: no heuristic baseline, custom K-factor
+  npx tsx src/index.ts --tournament -tm modelA modelB --tournament-no-heuristic --tournament-k-factor 24
 `));
 }
 
@@ -257,13 +313,101 @@ function createAgentFor(
 async function main() {
   const opts = parseArgs(args);
 
-  if (opts.bossExam) {
+  if (opts.serveReports) {
+    await serveReports(opts);
+  } else if (opts.tournament || opts.tournamentModels.length > 0) {
+    await runTournament(opts);
+  } else if (opts.bossExam) {
     await runBossExam(opts);
   } else if (opts.participants.length > 0) {
     await runScenario(opts);
   } else {
     await run1v1(opts);
   }
+}
+
+// ── Serve Reports Mode ────────────────────────────────
+
+async function serveReports(opts: CliOptions) {
+  const { startTournamentServer } = await import("./arena/tournament-server.js");
+
+  if (opts.testMode) {
+    console.log(chalk.yellow("  ⚠️  Test mode: using heuristic agents (no LLM needed)"));
+  }
+
+  await startTournamentServer({
+    port: opts.serveReportsPort,
+    baseURL: process.env.LLM_BASE_URL || "http://localhost:8008/v1",
+    apiKey: process.env.LLM_API_KEY || "no-key",
+    outputDir: opts.tournamentOutputDir,
+    testMode: opts.testMode,
+  });
+
+  console.log(chalk.bold.cyan(`\n⚔️  Tournament Dashboard: http://localhost:${opts.serveReportsPort}\n`));
+  console.log(chalk.dim("  Setup tournaments, monitor live, and view reports"));
+  console.log(chalk.dim("  Press Ctrl+C to stop\n"));
+}
+
+// ── Tournament Mode ────────────────────────────────────
+
+function label(model: string): string {
+  return model === "heuristic-baseline" ? "🤖 heuristic" : model;
+}
+
+async function runTournament(opts: CliOptions) {
+  if (opts.tournamentModels.length < 1) {
+    console.error(chalk.red("Need at least 1 model for tournament. Use -tm ModelA ModelB ..."));
+    process.exit(1);
+  }
+
+  const runner = new TournamentRunner({
+    models: opts.tournamentModels,
+    bestOf: opts.tournamentBestOf,
+    includeHeuristic: !opts.tournamentNoHeuristic,
+    baseURL: process.env.LLM_BASE_URL || "http://localhost:8008/v1",
+    apiKey: process.env.LLM_API_KEY || "no-key",
+    turnDelayMs: 0,
+    maxTurns: opts.maxTurns,
+    kFactor: opts.tournamentKFactor,
+    outputDir: opts.tournamentOutputDir,
+  });
+
+  // Log to console
+  runner.onEvent((event) => {
+    switch (event.type) {
+      case "tournament_start":
+        console.log(chalk.bold.cyan("\n🏆  ELO TOURNAMENT  🏆\n"));
+        break;
+      case "matchup_start":
+        console.log(chalk.bold.yellow(`━━━ ${label(event.modelA)} vs ${label(event.modelB)} ━━━`));
+        break;
+      case "game_start":
+        console.log(chalk.dim(`  Game ${event.gameNum}: ${event.classA} vs ${event.classB}`));
+        break;
+      case "game_end":
+        const g = event.game;
+        const w = g.winner === "A" ? g.modelA : g.winner === "B" ? g.modelB : "draw";
+        console.log(chalk.dim(`    → ${label(w)} wins in ${g.turns} turns  ELO: ${label(g.modelA)}=${event.eloA}  ${label(g.modelB)}=${event.eloB}`));
+        break;
+      case "matchup_end":
+        console.log(chalk.dim(`  Series: ${label(event.modelA)} ${event.winsA}-${event.winsB} ${label(event.modelB)}`));
+        break;
+      case "tournament_end":
+        break;
+    }
+  });
+
+  const result = await runner.run();
+
+  // Save reports
+  const { paths } = saveTournamentReport(result, opts.tournamentOutputDir);
+  console.log("");
+  console.log(chalk.bold.cyan("══════════════════════════════════════════════════"));
+  console.log(chalk.bold.cyan("  📁 Reports saved:"));
+  for (const p of paths) {
+    console.log(chalk.dim(`     ${p}`));
+  }
+  console.log(chalk.bold.cyan("══════════════════════════════════════════════════"));
 }
 
 // ── Scenario Battle (generic N-participant) ─────────────

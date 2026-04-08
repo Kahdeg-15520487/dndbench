@@ -24,7 +24,12 @@ export class HumanAgent implements IAgent {
   private pendingResolver: ((action: CombatAction) => void) | null = null;
 
   /** Latest state snapshot (for UI to read if needed) */
-  private currentState: BattleStateSnapshot | null = null;
+  private _currentState: BattleStateSnapshot | null = null;
+
+  /** Get the current battle state snapshot */
+  get currentState(): BattleStateSnapshot | null {
+    return this._currentState;
+  }
 
   /** Callback to notify the outside world that we're waiting for input */
   private onWaitingForInput?: (state: BattleStateSnapshot) => void;
@@ -38,11 +43,11 @@ export class HumanAgent implements IAgent {
   }
 
   onBattleStart(state: BattleStateSnapshot): void {
-    this.currentState = state;
+    this._currentState = state;
   }
 
   async getAction(snapshot: BattleStateSnapshot): Promise<CombatAction> {
-    this.currentState = snapshot;
+    this._currentState = snapshot;
 
     // Notify that we're waiting (used by server to send "your_turn" to client)
     this.onWaitingForInput?.(snapshot);

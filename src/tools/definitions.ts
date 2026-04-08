@@ -116,6 +116,18 @@ const ACTION_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: "dash",
+    description:
+      "ACTION: Dash toward a target at double speed (2x your movement). You move up to 2x your speed in feet toward the target. Use this to close the gap when you're too far away to attack. Commits your turn.",
+    parameters: {
+      target: {
+        type: "string",
+        description: "The enemy to dash toward.",
+        required: true,
+      },
+    },
+  },
+  {
     name: "wait",
     description:
       "ACTION: Wait and do nothing. Useful when conserving resources or when no good option is available. Commits your turn.",

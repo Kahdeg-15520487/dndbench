@@ -31,7 +31,7 @@ export interface IAgent {
   readonly name: string;
 
   /** Human-readable type for logging/UI */
-  readonly type: "heuristic" | "llm" | "human";
+  readonly type: "heuristic" | "llm" | "human" | "boss";
 
   /**
    * Called once when the battle begins.

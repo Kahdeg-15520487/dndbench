@@ -20,7 +20,7 @@ import { MELEE_RANGE } from "../engine/combat.js";
 type Phase = "normal" | "enraged" | "desperate";
 
 export class BossAgent implements IAgent {
-  readonly type = "heuristic" as const;
+  readonly type = "boss" as const;
 
   private bossId: BossId;
 
@@ -146,7 +146,7 @@ export class BossAgent implements IAgent {
     if (dmgSpells.length > 0) {
       const spell = dmgSpells[0];
       return withMove({
-        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: spell.id as any,
+        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: spell.id,
       }, spell.range);
     }
 
@@ -154,7 +154,7 @@ export class BossAgent implements IAgent {
     const cantrip = me.spells.find(s => s.level === 0 && s.currentCooldown === 0);
     if (cantrip) {
       return withMove({
-        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: cantrip.id as any,
+        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: cantrip.id,
       }, cantrip.range);
     }
 
@@ -178,7 +178,7 @@ export class BossAgent implements IAgent {
   // ── Lich Lord: spellcaster with healing ──
 
   private lichLordAI(): CombatAction {
-    const { me, target, withMove, slots, phase } = this._ctx;
+    const { me, target, withMove, slots } = this._ctx;
 
     // Heal if needed
     if (me.hp < me.maxHp * 0.5) {
@@ -209,7 +209,7 @@ export class BossAgent implements IAgent {
     if (dmgSpells.length > 0) {
       const spell = dmgSpells[0];
       return withMove({
-        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: spell.id as any,
+        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: spell.id,
       }, spell.range);
     }
 
@@ -217,7 +217,7 @@ export class BossAgent implements IAgent {
     const cantrip = me.spells.find(s => s.level === 0 && s.currentCooldown === 0);
     if (cantrip) {
       return withMove({
-        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: cantrip.id as any,
+        type: "cast_spell", actorId: this.id, targetId: target.id, spellId: cantrip.id,
       }, cantrip.range);
     }
 
@@ -227,7 +227,7 @@ export class BossAgent implements IAgent {
   // ── Demon Lord: physical powerhouse with spells ──
 
   private demonLordAI(): CombatAction {
-    const { me, target, withMove, slots, phase } = this._ctx;
+    const { me, target, withMove, phase } = this._ctx;
 
     // Action Surge
     const as = me.features.find(f => f.id === "action_surge" && f.usesRemaining > 0);

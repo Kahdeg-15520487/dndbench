@@ -4,17 +4,13 @@
 import {
   Character, CharacterClass, Spell, InventoryItem, Stats,
   SpellId, ItemId, SpellSlotGrid, WeaponDef, ClassFeature,
-  ClassFeatureId, AbilityName,
+  ClassFeatureId, AbilityName, abilityModifier,
 } from "./types.js";
 
 const PROF_BONUS = 3;
 
-function mod(score: number): number {
-  return Math.floor((score - 10) / 2);
-}
-
 function calcHp(hitDie: number, levels: number, conScore: number): number {
-  const conMod = mod(conScore);
+  const conMod = abilityModifier(conScore);
   return hitDie + conMod + (levels - 1) * (Math.floor(hitDie / 2) + 1 + conMod);
 }
 

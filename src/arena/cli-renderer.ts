@@ -7,12 +7,6 @@ import type { Character, CombatAction } from "../engine/types.js";
 import type { IAgent } from "../agent/interface.js";
 import chalk from "chalk";
 
-// ── Character name cache ────────────────────────────────
-const charNames = new Map<string, string>();
-
-/** Track the current acting character (set by turn_start) */
-let currentActorId = "";
-
 /**
  * Create a thinking callback for LLM agents (CLI mode).
  * Only prints thinking for the currently acting character.
@@ -52,9 +46,53 @@ export function createCliThinkingHandler(): (step: import("../engine/types.js").
 export function createCliRenderer(
   agentMap: Map<string, IAgent>
 ): BattleEventHandler {
+  // Per-instance state (avoids module-level mutable state)
+  const charNames = new Map<string, string>();
+
   // Buffer for current turn's action + move
   let pendingAction: CombatAction | null = null;
   let pendingMove: { dx: number; dy: number } | null = null;
+
+  // Helper functions scoped to this renderer instance
+  function describeAction(action: CombatAction): string {
+    const targetName = action.targetId ? (charNames.get(action.targetId) ?? action.targetId) : null;
+
+    switch (action.type) {
+      case "attack":
+        return targetName ? `attacks ${targetName}` : "attacks";
+      case "cast_spell":
+        return targetName
+          ? `casts ${action.spellId} on ${targetName}`
+          : `casts ${action.spellId ?? "a spell"}`;
+      case "use_item":
+        return targetName
+          ? `uses ${action.itemId} on ${targetName}`
+          : `uses ${action.itemId ?? "an item"}`;
+      case "defend":
+        return "defends";
+      case "wait":
+        return "waits";
+      case "flee":
+        return "flees";
+      default:
+        return action.type;
+    }
+  }
+
+  function printTurnSummary(action: CombatAction | null, move: { dx: number; dy: number } | null): void {
+    if (!action) return;
+
+    const actorName = charNames.get(action.actorId) ?? action.actorId;
+    const actionDesc = describeAction(action);
+
+    if (move) {
+      console.log(
+        chalk.cyan(`  → ${actorName} moves (${move.dx}, ${move.dy}) → ${actionDesc}`)
+      );
+    } else {
+      console.log(chalk.cyan(`  → ${actorName} ${actionDesc}`));
+    }
+  }
 
   return (event: BattleEvent) => {
     switch (event.type) {
@@ -70,7 +108,7 @@ export function createCliRenderer(
 
         const name = charNames.get(event.actorId) ?? event.actorId;
         const agent = agentMap.get(event.actorId);
-        const emoji: Record<string, string> = { heuristic: "🤖", llm: "🧠", human: "👤" };
+        const emoji: Record<string, string> = { heuristic: "🤖", llm: "🧠", human: "👤", boss: "👹" };
         console.log(
           chalk.bold(`\n── Turn ${event.turnNumber}: ${name}'s Action ${emoji[agent?.type ?? ""] ?? ""} ──`)
         );
@@ -119,48 +157,6 @@ export function createCliRenderer(
   };
 }
 
-// ── Turn Summary (combines action + move into one line) ──
-
-function describeAction(action: CombatAction): string {
-  const targetName = action.targetId ? (charNames.get(action.targetId) ?? action.targetId) : null;
-
-  switch (action.type) {
-    case "attack":
-      return targetName ? `attacks ${targetName}` : "attacks";
-    case "cast_spell":
-      return targetName
-        ? `casts ${action.spellId} on ${targetName}`
-        : `casts ${action.spellId ?? "a spell"}`;
-    case "use_item":
-      return targetName
-        ? `uses ${action.itemId} on ${targetName}`
-        : `uses ${action.itemId ?? "an item"}`;
-    case "defend":
-      return "defends";
-    case "wait":
-      return "waits";
-    case "flee":
-      return "flees";
-    default:
-      return action.type;
-  }
-}
-
-function printTurnSummary(action: CombatAction | null, move: { dx: number; dy: number } | null): void {
-  if (!action) return;
-
-  const actorName = charNames.get(action.actorId) ?? action.actorId;
-  const actionDesc = describeAction(action);
-
-  if (move) {
-    console.log(
-      chalk.cyan(`  → ${actorName} moves (${move.dx}, ${move.dy}) → ${actionDesc}`)
-    );
-  } else {
-    console.log(chalk.cyan(`  → ${actorName} ${actionDesc}`));
-  }
-}
-
 // ── Display helpers ─────────────────────────────────────
 
 function printBattleStart(characters: Character[], agentMap: Map<string, IAgent>): void {
@@ -174,6 +170,7 @@ function printBattleStart(characters: Character[], agentMap: Map<string, IAgent>
       heuristic: "🤖 AI",
       llm: "🧠 LLM",
       human: "👤 Human",
+      boss: "👹 Boss",
     };
     console.log(
       `  ${chalk.bold(char.name)} (${char.class}) [${typeLabel[agent?.type || ""] || "unknown"}]`

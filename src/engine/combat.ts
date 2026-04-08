@@ -9,12 +9,12 @@
 //  - All dice via seeded DiceRoller
 // ─────────────────────────────────────────────────────────
 import {
-  Character, CombatAction, CombatResult, DamageResult, SpellResult,
-  ItemResult, AbilityResult, MoveResult, StatusEffect, StatusEffectType,
-  Position, MoveVector, ArenaConfig, distance, maxMovePerTurn,
+  Character, CombatAction, CombatResult, DamageResult,
+  MoveResult, StatusEffectType,
+  MoveVector, ArenaConfig, distance, maxMovePerTurn,
   abilityModifier, AbilityName,
   hasSpellSlot, consumeSpellSlot, remainingSlots, totalRemainingSlots,
-  Spell, WeaponDef,
+  WeaponDef,
 } from "./types.js";
 import type { DiceRoller } from "./dice.js";
 
@@ -62,7 +62,6 @@ function rollWeaponDamage(
   context: string,
 ): { total: number; rolls: number[] } {
   const abilityMod = getMod(char, weapon.abilityMod);
-  const profBonus = char.stats.proficiencyBonus;
 
   // Parse damage dice: e.g. "2d6", "1d8", "3d6"
   const match = weapon.damageDice.match(/^(\d+)d(\d+)$/);
@@ -437,6 +436,9 @@ function resolveSpell(
           statusApplied = spell.statusEffect.type;
         }
       } else {
+        // Non-save damage spell with status effect — apply unconditionally
+        // Note: currently no spells use this path (statusEffect without saveAbility
+        // on a non-buff spell), but the branch is kept for future spell definitions
         target.statusEffects.push({
           type: spell.statusEffect.type,
           turnsRemaining: spell.statusEffect.duration,
@@ -497,17 +499,8 @@ function resolveSpell(
     };
   }
 
-  // Fallback
-  return {
-    action, actorId: caster.id, targetId: target.id,
-    narrative: `${caster.name} casts ${spell.name}!`,
-    spell: {
-      spellName: spell.name,
-      slotUsed: spell.level,
-      slotsRemaining: buildSlotsMap(caster),
-      cooldownRemaining: spell.currentCooldown,
-    },
-  };
+  // Safety: all spell paths should return above
+  throw new Error(`Unhandled spell type for ${spell.name}`);
 }
 
 /** Roll NdS damage dice, optionally doubling for crits */
@@ -580,6 +573,15 @@ function resolveItem(
   }
 
   if (item.type === "damage" && item.id === "bomb") {
+    // Range check for thrown items
+    const dist = distance(user.position, target.position);
+    if (item.range > 0 && dist > item.range) {
+      item.quantity++; // Refund the item since it wasn't thrown
+      return {
+        action, actorId: user.id, targetId: target.id,
+        narrative: `${user.name} tries to throw ${item.name} at ${target.name} but they're too far away! (${dist.toFixed(0)}ft vs ${item.range}ft range)`,
+      };
+    }
     // Alchemist Fire: 3d6 fire damage
     let dmg = 0;
     const rolls: number[] = [];
@@ -739,6 +741,42 @@ function ordinalSuffix(n: number): string {
 //  Defend / Wait / Flee
 // ═══════════════════════════════════════════════════════
 
+function resolveDash(actor: Character, target: Character | undefined, arena: ArenaConfig): CombatResult {
+  // Move toward the target (or nearest enemy) at 2x speed
+  const dashSpeed = actor.stats.speed * 2;
+
+  if (target) {
+    const dx = target.position.x - actor.position.x;
+    const dy = target.position.y - actor.position.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > 0) {
+      const scale = Math.min(dashSpeed / dist, 1);
+      const moveX = Math.round(dx * scale);
+      const moveY = Math.round(dy * scale);
+      const from = { ...actor.position };
+      actor.position = {
+        x: Math.max(0, Math.min(arena.width, actor.position.x + moveX)),
+        y: Math.max(0, Math.min(arena.height, actor.position.y + moveY)),
+      };
+      const actualDist = Math.round(Math.sqrt(
+        (actor.position.x - from.x) ** 2 + (actor.position.y - from.y) ** 2,
+      ) * 10) / 10;
+      return {
+        action: { type: "dash", actorId: actor.id, targetId: target.id },
+        actorId: actor.id,
+        narrative: `${actor.name} dashes toward ${target.name}! (${actualDist}ft)`,
+        move: { from, to: { ...actor.position }, distanceMoved: actualDist },
+      };
+    }
+  }
+
+  return {
+    action: { type: "dash", actorId: actor.id },
+    actorId: actor.id,
+    narrative: `${actor.name} dashes but has nowhere to go!`,
+  };
+}
+
 function resolveDefend(actor: Character): CombatResult {
   actor.isDefending = true;
   return {
@@ -757,12 +795,19 @@ function resolveWait(actor: Character): CombatResult {
 }
 
 function resolveFlee(actor: Character, arena: ArenaConfig): CombatResult {
-  // Move toward the nearest edge
+  // Move toward the nearest edge at full speed
   const distToLeft = actor.position.x;
   const distToRight = arena.width - actor.position.x;
-  const escaped = distToLeft < distToRight
-    ? actor.position.x <= 0
-    : actor.position.x >= arena.width;
+  const speed = actor.stats.speed;
+
+  // Dash toward nearest edge
+  if (distToLeft < distToRight) {
+    actor.position.x = Math.max(0, actor.position.x - speed);
+  } else {
+    actor.position.x = Math.min(arena.width, actor.position.x + speed);
+  }
+
+  const escaped = actor.position.x <= 0 || actor.position.x >= arena.width;
 
   return {
     action: { type: "flee", actorId: actor.id },
@@ -920,6 +965,10 @@ export function resolveAction(
 
     case "flee":
       result = resolveFlee(actor, arena || { width: 100, height: 60, label: "Arena" });
+      break;
+
+    case "dash":
+      result = resolveDash(actor, target, arena || { width: 100, height: 60, label: "Arena" });
       break;
 
     default:

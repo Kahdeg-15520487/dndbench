@@ -1,0 +1,1445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>⚔️ D&D Arena — Tournament Dashboard</title>
+<style>
+  :root {
+    --bg:#0d1117;--surface:#161b22;--border:#30363d;--text:#c9d1d9;
+    --dim:#8b949e;--accent:#58a6ff;--green:#3fb950;--red:#f85149;
+    --yellow:#d29922;--gold:#ffd700;--purple:#bc8cff;
+  }
+  :root[data-theme="light"] {
+    --bg:#ffffff;--surface:#f6f8fa;--border:#d0d7de;--text:#1f2328;
+    --dim:#656d76;--accent:#0969da;--green:#1a7f37;--red:#cf222e;
+    --yellow:#9a6700;--gold:#bf8700;--purple:#8250df;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+      background:var(--bg);color:var(--text);line-height:1.6}
+  .nav{background:var(--surface);border-bottom:1px solid var(--border);padding:12px 24px;
+       display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:10}
+  .nav h1{font-size:18px;color:var(--accent)}
+  .tab{color:var(--dim);cursor:pointer;padding:6px 12px;border-radius:6px;font-size:14px;font-weight:500}
+  .tab:hover{color:var(--text);background:rgba(255,255,255,0.05)}
+  .tab.active{color:var(--accent);background:rgba(88,166,255,0.1)}
+  .spacer{flex:1}
+  .btn{border:none;padding:6px 16px;border-radius:6px;cursor:pointer;font-weight:600;font-size:14px}
+  .btn-primary{background:var(--accent);color:var(--bg)}
+  .btn-primary:hover{opacity:.85}
+  .btn-primary:disabled{opacity:.4;cursor:not-allowed}
+  .btn-danger{background:var(--red);color:#fff}
+  .btn-danger:hover{opacity:.85}
+  .btn-ghost{background:transparent;color:var(--dim);border:1px solid var(--border)}
+  .btn-ghost:hover{color:var(--text);border-color:var(--dim)}
+  .content{max-width:1200px;margin:0 auto;padding:24px}
+  .panel{display:none}.panel.active{display:block}
+
+  /* Setup */
+  .setup-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px}
+  .card h3{color:var(--accent);margin-bottom:12px;font-size:15px}
+  .form-group{margin-bottom:12px}
+  .form-group label{display:block;font-size:13px;color:var(--dim);margin-bottom:4px}
+  .form-group input,.form-group select{width:100%;padding:8px 12px;background:var(--bg);
+    border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px}
+  .form-group input:focus,.form-group select:focus{outline:none;border-color:var(--accent)}
+
+  .model-chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .chip{background:rgba(88,166,255,0.1);border:1px solid var(--accent);color:var(--accent);
+        padding:4px 12px;border-radius:20px;font-size:13px;cursor:pointer;user-select:none;
+        transition:all .15s}
+  .chip:hover{background:rgba(88,166,255,0.2)}
+  .chip.selected{background:var(--accent);color:var(--bg);font-weight:600}
+  .chip:active{transform:scale(0.95)}
+
+  /* Live */
+  .live-status{background:var(--surface);border:1px solid var(--border);border-radius:8px;
+               padding:16px;margin-bottom:16px;display:flex;align-items:center;gap:12px}
+  .pulse{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+  .pulse.running{background:var(--green);animation:pulse 1.5s infinite}
+  .pulse.idle{background:var(--dim)}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+  @keyframes fadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+
+  .progress-bar{width:200px;height:6px;background:var(--border);border-radius:3px;overflow:hidden;position:relative}
+  .progress-bar .fill{height:100%;background:var(--accent);border-radius:3px;transition:width .3s}
+
+  .elo-table{width:100%;border-collapse:collapse;font-size:14px;margin-top:12px}
+  .elo-table th{background:var(--surface);color:var(--accent);text-align:left;
+                padding:8px 12px;border:1px solid var(--border)}
+  .elo-table td{padding:8px 12px;border:1px solid var(--border)}
+  .elo-table tr:hover{background:rgba(88,166,255,0.05)}
+  .elo-val{font-weight:700;font-variant-numeric:tabular-nums}
+  .elo-up{color:var(--green)}.elo-down{color:var(--red)}
+
+  .game-log{background:var(--surface);border:1px solid var(--border);border-radius:8px;
+            padding:16px;max-height:500px;overflow-y:auto;font-family:'Cascadia Code',Consolas,
+            'Courier New',monospace;font-size:13px;line-height:1.8}
+  .game-log .win{color:var(--green)}
+  .game-log .loss{color:var(--red)}
+  .game-log .draw{color:var(--yellow)}
+  .game-log .info{color:var(--dim)}
+  .game-log .game-header{color:var(--accent);margin-top:8px}
+  .game-log .turn{font-size:13px;padding:2px 0;border-bottom:1px solid #21262d;line-height:1.5;cursor:pointer}
+  .game-chip{background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 12px;margin:4px 0;cursor:pointer;transition:border-color .2s}
+  .game-chip:hover{border-color:var(--accent)}
+
+  /* Reports */
+  .report-list{list-style:none}
+  .report-list li{padding:12px 16px;border:1px solid var(--border);margin:4px 0;
+                  border-radius:8px;background:var(--surface);display:flex;
+                  align-items:center;gap:12px;transition:border-color .15s}
+  .report-list li:hover{border-color:var(--accent)}
+  .report-list a{color:var(--accent);text-decoration:none;font-weight:500;flex:1}
+  .report-list .meta{color:var(--dim);font-size:12px}
+  .report-list .view-btn{color:var(--accent);background:rgba(88,166,255,0.1);
+                         border:1px solid var(--accent);padding:4px 12px;border-radius:4px;
+                         cursor:pointer;font-size:12px;text-decoration:none}
+  .report-list .view-btn:hover{background:rgba(88,166,255,0.2)}
+
+  .error{color:var(--red);font-size:14px;margin-top:8px}
+  .empty-state{text-align:center;padding:40px 20px;color:var(--dim)}
+  .empty-state .icon{font-size:48px;margin-bottom:12px}
+
+  @media(max-width:768px){.setup-grid{grid-template-columns:1fr}.nav{flex-wrap:wrap;padding:8px 12px;gap:4px}.nav h1{font-size:16px;width:100%;text-align:center}.tab{padding:6px 12px;font-size:13px}main{padding:12px}h2{font-size:18px}.settings-grid{grid-template-columns:1fr}}
+  @media print{.nav{display:none!important}body{background:#fff;color:#000}}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <h1>⚔️ Tournament</h1>
+  <div class="tab active" data-panel="setup">Setup</div>
+  <div class="tab" data-panel="live">Live</div>
+  <div class="tab" data-panel="reports">Reports</div>
+  <div class="spacer"></div>
+  <button class="btn btn-ghost" onclick="toggleTheme()" title="Toggle light/dark theme" id="themeBtn">🌙</button>
+  <span id="healthIndicator" style="font-size:12px;padding:4px 8px;border-radius:4px;display:none"></span>
+  <button class="btn btn-danger" id="abortBtn" onclick="abortTournament()" style="display:none">⏹ Stop</button>
+  <button class="btn btn-primary" id="startBtn" onclick="startTournament()">🚀 Start</button>
+  <button class="btn btn-ghost" onclick="shareUrl()" title="Copy shareable URL">🔗 Share</button>
+</nav>
+
+<div class="content">
+  <!-- SETUP PANEL -->
+  <div class="panel active" id="panel-setup">
+    <div class="setup-grid">
+      <div class="card">
+        <h3>🧠 Available Models</h3>
+        <p style="color:var(--dim);font-size:13px;margin-bottom:8px">Click to select models for the tournament.</p>
+        <div class="model-chips" id="modelChips"><span class="info">Loading models from LLM endpoint...</span></div>
+        <div class="form-group" style="margin-top:16px">
+          <label>Or enter manually (comma-separated)</label>
+          <input type="text" id="manualModels" placeholder="e.g. Alice, Bob, Charlie">
+        </div>
+      </div>
+      <div class="card">
+        <h3>⚙️ Settings</h3>
+        <div class="form-group">
+          <label>Quick Presets</label>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost" onclick="applyPreset(1,32,15)" style="flex:1">⚡ Quick (Bo1)</button>
+            <button class="btn btn-ghost" onclick="applyPreset(5,32,30)" style="flex:1">⚔️ Standard (Bo5)</button>
+            <button class="btn btn-ghost" onclick="applyPreset(11,24,40)" style="flex:1">🏃 Marathon (Bo11)</button>
+          </div>
+          <div style="margin-top:8px">
+            <button class="btn btn-accent" onclick="quickDuel()" style="width:100%">⚔️ Quick Duel — Pick 2 Models & Fight!</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Best of (games per matchup)</label>
+          <input type="number" id="bestOf" value="5" min="1" max="21">
+        </div>
+        <div class="form-group">
+          <label>ELO K-Factor</label>
+          <input type="number" id="kFactor" value="32" min="8" max="64">
+        </div>
+        <div class="form-group">
+          <label>Max Turns per Battle</label>
+          <input type="number" id="maxTurns" value="30" min="10" max="100">
+        </div>
+        <div class="form-group" style="margin-top:8px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="includeHeuristic" checked>
+            Include 🤖 Heuristic Baseline
+          </label>
+        </div>
+      </div>
+    </div>
+    <div class="error" id="setupError"></div>
+  </div>
+
+  <!-- LIVE PANEL -->
+  <div class="panel" id="panel-live">
+    <div class="live-status">
+      <span class="pulse idle" id="statusPulse"></span>
+      <span id="statusText">No tournament running</span>
+      <div class="progress-bar" id="progressBar" style="display:none">
+        <div class="fill" id="progressFill" style="width:0%"></div>
+      </div>
+      <div id="timerText" style="display:none;font-size:11px;color:var(--dim);margin-top:4px"></div>
+      <div id="matchupBracket" style="display:none;margin-top:12px;padding:8px;background:var(--surface);border:1px solid var(--border);border-radius:8px;font-size:12px"></div>
+    </div>
+    <div id="dashboardStats" style="display:none;margin-bottom:12px;padding:8px 12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;font-size:12px;gap:24px"></div>
+    <h3 style="color:var(--accent);margin-bottom:8px">📊 ELO Rankings</h3>
+    <table class="elo-table" id="eloTable">
+      <thead><tr><th>#</th><th>Model</th><th>ELO</th><th>W</th><th>L</th><th>D</th><th>Win%</th><th>Bad%</th></tr></thead>
+      <tbody id="eloBody"><tr><td colspan="8" class="empty-state">Waiting for tournament data...</td></tr></tbody>
+    </table>
+    <h3 style="color:var(--accent);margin-top:20px;margin-bottom:8px">📈 ELO History</h3>
+    <canvas id="eloChart" width="700" height="200" style="width:100%;height:200px;background:var(--surface);border:1px solid var(--border);border-radius:8px"></canvas>
+    <h3 style="color:var(--accent);margin-top:20px;margin-bottom:8px">⚙️ Game Log
+      <label style="float:right;font-size:12px;color:var(--dim);cursor:pointer">
+        <input type="checkbox" id="autoScroll" checked> Auto-scroll
+      </label>
+    </h3>
+    <div class="game-log" id="gameLog"><span class="info">Events will appear here when a tournament starts...</span></div>
+  </div>
+
+  <!-- REPORTS PANEL -->
+  <div class="panel" id="panel-reports">
+    <div id="reportContent">
+      <div class="empty-state">
+        <div class="icon">📄</div>
+        <p>Run a tournament to generate reports.</p>
+        <p style="margin-top:8px;font-size:13px">Reports include ELO rankings, matchup matrices, and per-game analysis.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Sound notification ──
+function playBeep() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    osc.type = 'sine';
+    gain.gain.value = 0.1;
+    osc.start();
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+    osc.stop(ctx.currentTime + 0.5);
+  } catch { /* audio not available */ }
+}
+
+// ── Copy turn text ──
+function copyTurn(el) {
+  const text = el.textContent || el.innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    el.style.outline = '2px solid var(--green)';
+    setTimeout(() => { el.style.outline = ''; }, 300);
+  });
+}
+
+// ── Confetti effect ──
+function showConfetti() {
+  const canvas = document.createElement('canvas');
+  canvas.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:9999';
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  document.body.appendChild(canvas);
+  const ctx = canvas.getContext('2d');
+  const colors = ['#ffd700','#ff6b6b','#48dbfb','#ff9ff3','#54a0ff','#5f27cd','#01a3a4','#feca57'];
+  const particles = Array.from({length: 150}, () => ({
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height - canvas.height,
+    w: Math.random() * 8 + 4,
+    h: Math.random() * 6 + 2,
+    color: colors[Math.floor(Math.random() * colors.length)],
+    vx: (Math.random() - 0.5) * 4,
+    vy: Math.random() * 3 + 2,
+    rot: Math.random() * 360,
+    rotSpeed: (Math.random() - 0.5) * 10,
+  }));
+  let frame = 0;
+  const maxFrames = 180;
+  function animate() {
+    if (frame++ > maxFrames) { canvas.remove(); return; }
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const alpha = frame > maxFrames - 30 ? (maxFrames - frame) / 30 : 1;
+    ctx.globalAlpha = alpha;
+    particles.forEach(p => {
+      p.x += p.vx;
+      p.y += p.vy;
+      p.vy += 0.05;
+      p.rot += p.rotSpeed;
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot * Math.PI / 180);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.w/2, -p.h/2, p.w, p.h);
+      ctx.restore();
+    });
+    requestAnimationFrame(animate);
+  }
+  animate();
+}
+
+// ── Theme toggle ──
+// ── Toggle matchup detail ──
+function toggleMatchupDetail(idx) {
+  const el = document.getElementById('matchupDetail' + idx);
+  if (el) el.style.display = el.style.display === 'none' ? '' : 'none';
+}
+
+function toggleTheme() {
+  const root = document.documentElement;
+  const current = root.getAttribute('data-theme');
+  if (current === 'light') {
+    root.removeAttribute('data-theme');
+    document.getElementById('themeBtn').textContent = '🌙';
+    localStorage.setItem('theme', 'dark');
+  } else {
+    root.setAttribute('data-theme', 'light');
+    document.getElementById('themeBtn').textContent = '🌓';
+    localStorage.setItem('theme', 'light');
+  }
+}
+// Restore saved theme
+(function() {
+  const saved = localStorage.getItem('theme');
+  if (saved === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    document.getElementById('themeBtn').textContent = '🌓';
+  }
+})();
+
+// ── Tab switching ──
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  const tab = document.querySelector('.tab[data-panel="' + name + '"]');
+  if (tab) tab.classList.add('active');
+  const panel = document.getElementById('panel-' + name);
+  if (panel) panel.classList.add('active');
+  // Auto-refresh reports when switching to that tab
+  if (name === 'reports') loadReports();
+}
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => switchTab(tab.dataset.panel));
+});
+
+// ── Keyboard shortcuts ──
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.key === '1') switchTab('setup');
+  else if (e.key === '2') switchTab('live');
+  else if (e.key === '3') switchTab('reports');
+  else if (e.key === 'Escape') {
+    const modals = ['gameViewer', 'historyViewer'];
+    modals.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
+  }
+});
+
+// ── State ──
+const HB = '${HB}';
+let availableModels = [];
+let selectedModels = new Set();
+let eventSource = null;
+let stats = {};
+let totalGames = 0;
+let completedGames = 0;
+let tournamentStartTime = null;
+let matchupResults = []; // { modelA, modelB, winsA, winsB, draws, gamesPlayed, totalGames, games: [{winner, turns, classA, classB}] }
+
+// ── Helpers ──
+function renderBracket() {
+  const el = document.getElementById('matchupBracket');
+  if (matchupResults.length === 0) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  let html = '<div style="font-weight:bold;margin-bottom:6px;color:var(--accent)">⚔️ Matchups</div>';
+  matchupResults.forEach((m, mi) => {
+    const pctA = m.totalGames > 0 ? (m.winsA / m.totalGames * 100) : 0;
+    const pctB = m.totalGames > 0 ? (m.winsB / m.totalGames * 100) : 0;
+    const pctD = m.totalGames > 0 ? (m.draws / m.totalGames * 100) : 0;
+    const barA = Math.round(pctA);
+    const barD = Math.round(pctD);
+    const barB = 100 - barA - barD;
+    const aWin = m.winsA > m.winsB;
+    const bWin = m.winsB > m.winsA;
+    html += '<div style="margin-bottom:6px">';
+    html += '<div style="display:flex;justify-content:space-between;margin-bottom:2px;cursor:pointer" onclick="toggleMatchupDetail(' + mi + ')">';
+    html += '<span style="font-weight:' + (aWin ? 'bold' : 'normal') + '">' + label(m.modelA) + ' <span style="color:var(--green)">' + m.winsA + '</span></span>';
+    html += '<span style="color:var(--dim)">' + m.gamesPlayed + '/' + m.totalGames + (m.games.length > 0 ? ' ▾' : '') + '</span>';
+    html += '<span style="font-weight:' + (bWin ? 'bold' : 'normal') + '"><span style="color:var(--green)">' + m.winsB + '</span> ' + label(m.modelB) + '</span>';
+    html += '</div>';
+    html += '<div style="height:6px;background:var(--border);border-radius:3px;display:flex;overflow:hidden">';
+    if (barA > 0) html += '<div style="width:' + barA + '%;background:var(--accent)"></div>';
+    if (barD > 0) html += '<div style="width:' + barD + '%;background:var(--yellow)"></div>';
+    if (barB > 0) html += '<div style="width:' + barB + '%;background:var(--red)"></div>';
+    html += '</div>';
+    // Game detail (collapsible)
+    html += '<div id="matchupDetail' + mi + '" style="display:none;margin-top:4px;padding:4px 8px;background:var(--bg);border-radius:4px;font-size:11px">';
+    if (m.games.length > 0) {
+      m.games.forEach((g, gi) => {
+        const w = g.winner === 'A' ? label(m.modelA) : g.winner === 'B' ? label(m.modelB) : 'Draw';
+        const color = g.winner === 'draw' ? 'var(--yellow)' : 'var(--green)';
+        html += '<div style="padding:2px 0;border-bottom:1px solid var(--border)">Game ' + (gi+1) + ': ' + g.classA + ' vs ' + g.classB + ' → <span style="color:' + color + '">' + w + '</span> (' + g.turns + ' turns' + (g.durationMs ? ', ' + (g.durationMs / 1000).toFixed(1) + 's' : '') + ')' + (g.error ? ' <span style="color:var(--red)">⚠️ ' + g.error + '</span>' : '') + '</div>';
+      });
+    } else {
+      html += '<div style="color:var(--dim)">No games yet</div>';
+    }
+    html += '</div>';
+    html += '</div>';
+  });
+  el.innerHTML = html;
+}
+function label(model) {
+  return model === HB ? '🤖 heuristic' : model;
+}
+
+function shortName(model) {
+  if (model === HB) return '🤖';
+  // Shorten common patterns: take first word before first dash or underscore
+  const parts = model.split(/[-_]/);
+  if (parts.length <= 2) return model;
+  // Return first two parts + size if present
+  const sizeMatch = model.match(/(\d+b|\d+B)/i);
+  return parts[0] + (sizeMatch ? ' ' + sizeMatch[1] : '');
+}
+
+function autoScroll() {
+  const log = document.getElementById('gameLog');
+  const cb = document.getElementById('autoScroll');
+  if (log && cb && cb.checked) log.scrollTop = log.scrollHeight;
+}
+
+function formatElapsed(ms) {
+  const sec = Math.floor(ms / 1000);
+  const min = Math.floor(sec / 60);
+  return min > 0 ? min + 'm ' + (sec % 60) + 's' : sec + 's';
+}
+
+function eta() {
+  if (!tournamentStartTime || completedGames < 2) return '—';
+  const elapsed = Date.now() - tournamentStartTime;
+  const perGame = elapsed / completedGames;
+  const remaining = (totalGames - completedGames) * perGame;
+  return '~' + formatElapsed(remaining);
+}
+
+function updateProgress() {
+  const pct = totalGames > 0 ? (completedGames / totalGames * 100).toFixed(0) : 0;
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('statusText').textContent =
+    'Game ' + completedGames + '/' + totalGames + ' • ETA ' + eta();
+  // Update timer text
+  const timerEl = document.getElementById('timerText');
+  if (timerEl && tournamentStartTime) {
+    const elapsed = Date.now() - tournamentStartTime;
+    timerEl.style.display = '';
+    timerEl.textContent = '⏱ ' + formatElapsed(elapsed) + ' elapsed • ' + pct + '% complete' +
+      (completedGames >= 2 ? ' • ~' + formatElapsed((totalGames - completedGames) * elapsed / completedGames) + ' remaining' : '');
+  }
+}
+
+// ── Dashboard stats ──
+async function loadDashboardStats() {
+  try {
+    const resp = await fetch('/api/history');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const history = data.history || [];
+    if (history.length === 0) { document.getElementById('dashboardStats').style.display = 'none'; return; }
+    const totalGames = history.reduce((s, h) => s + (h.result?.matchups?.reduce((g, m) => g + m.gamesPlayed, 0) || 0), 0);
+    const uniqueModels = new Set(history.flatMap(h => h.models || []));
+    const el = document.getElementById('dashboardStats');
+    el.style.display = 'flex';
+    el.innerHTML = '<span>🏟️ Tournaments: <strong>' + history.length + '</strong></span>' +
+      '<span>⚔️ Games: <strong>' + totalGames + '</strong></span>' +
+      '<span>🤖 Models tested: <strong>' + uniqueModels.size + '</strong></span>';
+  } catch { /* ignore */ }
+}
+
+// ── Load models ──
+async function loadModels() {
+  try {
+    const [modelsResp, ratingsResp] = await Promise.all([
+      fetch('/api/models'),
+      fetch('/api/ratings'),
+    ]);
+    const data = await modelsResp.json();
+    const ratingsData = await ratingsResp.json();
+    const ratings = ratingsData.ratings || {};
+    availableModels = data.models || [];
+    const container = document.getElementById('modelChips');
+    if (availableModels.length === 0) {
+      container.innerHTML = '<span class="info">No models found at LLM endpoint.</span>' +
+        (data.error ? '<div class="error">' + data.error + '</div>' : '');
+    } else {
+      const testNote = data.testMode ? '<div class="info" style="margin-bottom:8px">🧪 Test mode — using heuristic agents. Enter any names you like!</div>' : '';
+      container.innerHTML = testNote + availableModels.map(m => {
+        const elo = ratings[m]?.elo;
+        const eloBadge = elo ? ' <span style="font-size:10px;color:var(--dim)">(' + Math.round(elo) + ')</span>' : '';
+        return '<span class="chip" data-model="' + m + '" onclick="toggleModel(this)">' + m + eloBadge + '</span>';
+      }).join('');
+    }
+  } catch (e) {
+    document.getElementById('modelChips').innerHTML =
+      '<span class="info">LLM endpoint not reachable. Enter model names manually.</span>';
+  }
+}
+loadModels();
+loadDashboardStats();
+
+// ── Health check ──
+async function checkHealth() {
+  const el = document.getElementById('healthIndicator');
+  try {
+    const resp = await fetch('/api/health');
+    const data = await resp.json();
+    el.style.display = '';
+    if (data.status === 'ok') {
+      el.style.background = 'var(--green)22';
+      el.style.color = 'var(--green)';
+      el.textContent = '● LLM OK (' + data.latency + ', ' + data.models + ' models)';
+    } else {
+      el.style.background = 'var(--yellow)22';
+      el.style.color = 'var(--yellow)';
+      el.textContent = '● LLM Error: ' + (data.error || 'unknown');
+    }
+  } catch {
+    el.style.display = '';
+    el.style.background = 'var(--red)22';
+    el.style.color = 'var(--red)';
+    el.textContent = '● Server unreachable';
+  }
+}
+checkHealth();
+setInterval(checkHealth, 30000); // check every 30s
+
+// ── URL params support — allow bookmarking/shared tournament links ──
+(function applyUrlParams() {
+  const params = new URLSearchParams(window.location.search);
+  const urlModels = params.get('models');
+  if (urlModels) {
+    const models = urlModels.split(',').map(s => s.trim()).filter(Boolean);
+    models.forEach(m => selectedModels.add(m));
+    document.getElementById('manualModels').value = models.join(', ');
+  }
+  const bestOf = params.get('bestOf');
+  if (bestOf) document.getElementById('bestOf').value = bestOf;
+  const kFactor = params.get('kFactor');
+  if (kFactor) document.getElementById('kFactor').value = kFactor;
+  const maxTurns = params.get('maxTurns');
+  if (maxTurns) document.getElementById('maxTurns').value = maxTurns;
+  const heuristic = params.get('heuristic');
+  if (heuristic !== null) document.getElementById('includeHeuristic').checked = heuristic !== 'false';
+  // Auto-start if requested
+  if (params.get('autoStart') === 'true') {
+    setTimeout(() => startTournament(), 500); // Small delay for models to load
+  }
+})();
+
+function toggleModel(el) {
+  const model = el.dataset.model;
+  if (selectedModels.has(model)) { selectedModels.delete(model); el.classList.remove('selected'); }
+  else { selectedModels.add(model); el.classList.add('selected'); }
+}
+
+// ── Share URL ──
+function shareUrl() {
+  const manual = document.getElementById('manualModels').value.trim();
+  let models = manual ? manual.split(',').map(s => s.trim()).filter(Boolean) : [...selectedModels];
+  if (models.length === 0) {
+    document.getElementById('setupError').textContent = 'Select models first';
+    return;
+  }
+  const params = new URLSearchParams({
+    models: models.join(','),
+    bestOf: document.getElementById('bestOf').value,
+    kFactor: document.getElementById('kFactor').value,
+    maxTurns: document.getElementById('maxTurns').value,
+    heuristic: document.getElementById('includeHeuristic').checked ? 'true' : 'false',
+  });
+  const url = window.location.origin + window.location.pathname + '?' + params.toString();
+  navigator.clipboard.writeText(url).then(() => {
+    document.getElementById('setupError').textContent = '';
+    toast('✅ URL copied to clipboard!', 'success');
+  });
+}
+
+// ── Presets ──
+function quickDuel() {
+  // Select first 2 models (or first 2 from available)
+  const models = [...selectedModels];
+  if (models.length < 2) {
+    toast('Select at least 2 models for a duel', 'error');
+    return;
+  }
+  const duel = models.slice(0, 2);
+  selectedModels.clear();
+  duel.forEach(m => selectedModels.add(m));
+  document.getElementById('bestOf').value = '1';
+  document.getElementById('maxTurns').value = '15';
+  document.getElementById('kFactor').value = '32';
+  document.getElementById('includeHeuristic').checked = false;
+  refreshModelChips();
+  startTournament();
+}
+
+function applyPreset(bestOf, kFactor, maxTurns) {
+  document.getElementById('bestOf').value = bestOf;
+  document.getElementById('kFactor').value = kFactor;
+  document.getElementById('maxTurns').value = maxTurns;
+}
+
+// ── Start tournament ──
+async function startTournament() {
+  const manual = document.getElementById('manualModels').value.trim();
+  let models = [];
+  if (manual) {
+    models = manual.split(',').map(s => s.trim()).filter(Boolean);
+  } else {
+    models = [...selectedModels];
+  }
+  if (models.length < 1) {
+    document.getElementById('setupError').textContent = 'Select at least 1 model';
+    return;
+  }
+
+  const bestOf = parseInt(document.getElementById('bestOf').value);
+  const kFactor = parseInt(document.getElementById('kFactor').value);
+  const maxTurns = parseInt(document.getElementById('maxTurns').value);
+  if (bestOf < 1 || bestOf > 99) {
+    document.getElementById('setupError').textContent = 'Best of must be between 1 and 99';
+    return;
+  }
+  if (kFactor < 1 || kFactor > 100) {
+    document.getElementById('setupError').textContent = 'K-factor must be between 1 and 100';
+    return;
+  }
+  if (maxTurns < 1 || maxTurns > 999) {
+    document.getElementById('setupError').textContent = 'Max turns must be between 1 and 999';
+    return;
+  }
+
+  const config = {
+    models,
+    bestOf: bestOf || 5,
+    kFactor: kFactor || 32,
+    maxTurns: maxTurns || 30,
+    includeHeuristic: document.getElementById('includeHeuristic').checked,
+  };
+
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('setupError').textContent = '';
+
+  try {
+    const resp = await fetch('/api/tournament/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      toast(data.error || 'Failed to start', 'error');
+      document.getElementById('startBtn').disabled = false;
+      return;
+    }
+    document.querySelector('[data-panel="live"]').click();
+    connectSSE();
+    toast('Tournament started!', 'success');
+  } catch (e) {
+    toast(e.message, 'error');
+    document.getElementById('startBtn').disabled = false;
+  }
+}
+
+// ── Abort tournament ──
+async function abortTournament() {
+  if (!confirm('Abort the running tournament?')) return;
+  try {
+    await fetch('/api/tournament/abort', { method: 'POST' });
+  } catch (e) { /* ignore */ }
+}
+
+// ── SSE ──
+let sseRetryTimer = null;
+
+function connectSSE() {
+  if (eventSource) { eventSource.close(); eventSource = null; }
+  if (sseRetryTimer) { clearTimeout(sseRetryTimer); sseRetryTimer = null; }
+  eventSource = new EventSource('/api/tournament/events');
+  eventSource.onmessage = (e) => handleEvent(JSON.parse(e.data));
+  eventSource.onerror = () => {
+    if (eventSource) { eventSource.close(); eventSource = null; }
+    // Auto-reconnect after 3 seconds
+    sseRetryTimer = setTimeout(connectSSE, 3000);
+  };
+}
+
+function handleEvent(event) {
+  const log = document.getElementById('gameLog');
+  const statusPulse = document.getElementById('statusPulse');
+
+  switch (event.type) {
+    case 'tournament_start':
+      statusPulse.className = 'pulse running';
+      log.innerHTML = '';
+      stats = {};
+      Object.keys(eloHistory).forEach(k => delete eloHistory[k]);
+      matchupResults = [];
+      totalGames = event.totalGames;
+      completedGames = 0;
+      tournamentStartTime = Date.now();
+      document.getElementById('abortBtn').style.display = '';
+      document.getElementById('progressBar').style.display = '';
+      event.participants.forEach(m => {
+        stats[m] = { elo: 1000, wins: 0, losses: 0, draws: 0, matches: 0, badActions: 0, turns: 0, prevElo: 1000 };
+      });
+      log.innerHTML += '<div class="info">🏆 Tournament started — ' + event.participants.length +
+        ' participants, ' + event.totalGames + ' games</div>';
+      updateEloTable();
+      updateProgress();
+      break;
+
+    case 'matchup_start':
+      matchupResults.push({ modelA: event.modelA, modelB: event.modelB, winsA: 0, winsB: 0, draws: 0, gamesPlayed: 0, totalGames: event.totalGames, games: [] });
+      renderBracket();
+      log.innerHTML += '<div class="game-header">━━━ ' + label(event.modelA) + ' vs ' + label(event.modelB) + ' ━━━</div>';
+      autoScroll();
+      break;
+
+    case 'game_start':
+      log.innerHTML += '<div class="info">  Game ' + event.gameNum + '/' + event.totalGames +
+        ': ' + event.classA + ' vs ' + event.classB + '</div>';
+      autoScroll();
+      break;
+
+    case 'turn': {
+      const hpBar = (hp, max) => {
+        const pct = Math.max(0, Math.round(hp / max * 100));
+        const color = pct > 50 ? '#3fb950' : pct > 25 ? '#d29922' : '#f85149';
+        return '<span style="color:' + color + '">' + hp + '/' + max + '</span>';
+      };
+      const line = '<span style="color:#484f58">[' + event.turnNumber + ']</span> ' +
+        event.narrative + ' ' +
+        hpBar(event.hpA, event.maxHpA) + ' vs ' + hpBar(event.hpB, event.maxHpB);
+      log.innerHTML += '<div class="turn" onclick="copyTurn(this)" title="Click to copy">' + line + '</div>';
+      autoScroll();
+      break;
+    }
+
+    case 'game_end': {
+      completedGames++;
+      const g = event.game;
+      const winnerName = g.winner === 'A' ? label(g.modelA) : g.winner === 'B' ? label(g.modelB) : 'Draw';
+      const cls = g.winner === 'draw' ? 'draw' : 'win';
+      const eloDeltaA = event.eloA - (stats[g.modelA]?.prevElo ?? 1000);
+      const eloDeltaB = event.eloB - (stats[g.modelB]?.prevElo ?? 1000);
+
+      log.innerHTML += '<div class="' + cls + '">  → ' + winnerName + ' in ' + g.turns +
+        ' turns' + (g.durationMs ? ' (' + (g.durationMs / 1000).toFixed(1) + 's)' : '') + ' — ' + label(g.modelA) + ' ' + event.eloA + ' (' + (eloDeltaA >= 0 ? '+' : '') + eloDeltaA + ')' +
+        '  ' + label(g.modelB) + ' ' + event.eloB + ' (' + (eloDeltaB >= 0 ? '+' : '') + eloDeltaB + ')</div>';
+      autoScroll();
+
+      // Update stats
+      [g.modelA, g.modelB].forEach(m => {
+        if (!stats[m]) stats[m] = { elo:1000, wins:0, losses:0, draws:0, matches:0, badActions:0, turns:0, prevElo:1000 };
+      });
+      stats[g.modelA].prevElo = event.eloA;
+      stats[g.modelB].prevElo = event.eloB;
+      stats[g.modelA].elo = event.eloA;
+      stats[g.modelB].elo = event.eloB;
+      stats[g.modelA].matches++;
+      stats[g.modelB].matches++;
+      if (g.winner === 'A') { stats[g.modelA].wins++; stats[g.modelB].losses++; }
+      else if (g.winner === 'B') { stats[g.modelB].wins++; stats[g.modelA].losses++; }
+      else { stats[g.modelA].draws++; stats[g.modelB].draws++; }
+      stats[g.modelA].badActions += g.statsA.badActions;
+      stats[g.modelA].turns += g.statsA.turns;
+      stats[g.modelB].badActions += g.statsB.badActions;
+      stats[g.modelB].turns += g.statsB.turns;
+      recordEloSnapshot();
+      updateEloTable();
+      updateProgress();
+      // Update bracket
+      const currentMatchup = matchupResults[matchupResults.length - 1];
+      if (currentMatchup) {
+        currentMatchup.gamesPlayed++;
+        if (g.winner === 'A') currentMatchup.winsA++;
+        else if (g.winner === 'B') currentMatchup.winsB++;
+        else currentMatchup.draws++;
+        currentMatchup.games.push({ winner: g.winner, turns: g.turns, classA: g.classA, classB: g.classB });
+        renderBracket();
+      }
+      document.title = '(' + completedGames + '/' + totalGames + ') Tournament — D&D Bench';
+      break;
+    }
+
+    case 'matchup_end':
+      log.innerHTML += '<div class="info">  Series: ' + label(event.modelA) + ' ' +
+        event.winsA + '–' + event.winsB + ' ' + label(event.modelB) +
+        (event.draws > 0 ? ' (' + event.draws + ' draws)' : '') + '</div>';
+      autoScroll();
+      break;
+
+    case 'tournament_end':
+    case 'tournament_aborted':
+      statusPulse.className = 'pulse idle';
+      document.getElementById('statusText').textContent =
+        event.type === 'tournament_aborted' ? 'Tournament aborted' : 'Tournament complete!';
+      document.getElementById('startBtn').disabled = false;
+      document.getElementById('abortBtn').style.display = 'none';
+      document.getElementById('progressBar').style.display = 'none';
+      document.getElementById('timerText').style.display = 'none';
+      log.innerHTML += '<div class="win">🏆 ' +
+        (event.type === 'tournament_aborted' ? 'Aborted.' : 'Complete!') + '</div>';
+      // Show final rankings in Live panel
+      if (event.type === 'tournament_end' && event.result) {
+        const sorted = [...event.result.stats].sort((a, b) => b.elo - a.elo);
+        log.innerHTML += '<div style="margin-top:8px;padding:8px;background:var(--surface);border-radius:6px;border:1px solid var(--border)">';
+        log.innerHTML += '<div style="font-weight:bold;margin-bottom:4px">🏆 Final Rankings</div>';
+        sorted.forEach((s, i) => {
+          const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1);
+          const name = s.model;
+          log.innerHTML += '<div style="padding:2px 0">' + medal + ' <strong>' + name + '</strong> — ' + Math.round(s.elo) + ' — ' + s.wins + 'W/' + s.losses + 'L/' + s.draws + 'D</div>';
+        });
+        log.innerHTML += '</div>';
+      }
+      autoScroll();
+      document.title = 'D&D Bench — Tournament Complete';
+      if (event.type === 'tournament_end') { playBeep(); showConfetti(); toast('🏆 Tournament complete!', 'success'); }
+      if (eventSource) eventSource.close();
+      loadReports();
+      break;
+
+    case 'reports_saved':
+      loadReports();
+      break;
+
+    case 'tournament_error':
+      log.innerHTML += '<div class="loss">❌ Error: ' + event.error + '</div>';
+      autoScroll();
+      break;
+  }
+}
+
+function updateEloTable() {
+  const body = document.getElementById('eloBody');
+  const sorted = Object.entries(stats).sort((a, b) => b[1].elo - a[1].elo);
+  body.innerHTML = sorted.map(([model, s], i) => {
+    const winPct = s.matches > 0 ? (s.wins / s.matches * 100).toFixed(0) : '—';
+    const badPct = s.turns > 0 ? (s.badActions / s.turns * 100).toFixed(1) : '—';
+    const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1);
+    const delta = s.elo - 1000;
+    const eloClass = delta > 0 ? 'elo-up' : delta < 0 ? 'elo-down' : '';
+    const deltaStr = delta !== 0 ? ' <span class="' + eloClass + '">(' + (delta > 0 ? '+' : '') + delta + ')</span>' : '';
+    return '<tr><td>' + medal + '</td><td><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + modelColor(model) + ';margin-right:6px"></span><strong>' + label(model) + '</strong></td>' +
+      '<td class="elo-val">' + s.elo + deltaStr + '</td>' +
+      '<td>' + s.wins + '</td><td>' + s.losses + '</td><td>' + s.draws + '</td>' +
+      '<td>' + winPct + '%</td><td>' + badPct + '%</td></tr>';
+  }).join('');
+  drawEloChart();
+}
+
+// ── ELO Chart ──
+const eloHistory = {};
+const CHART_COLORS = ['#58a6ff', '#f0883e', '#3fb950', '#d2a8ff', '#ff7b72', '#79c0ff', '#ffa657', '#7ee787'];
+const modelColorMap = {};
+let colorIndex = 0;
+function modelColor(name) {
+  if (!modelColorMap[name]) {
+    modelColorMap[name] = CHART_COLORS[colorIndex % CHART_COLORS.length];
+    colorIndex++;
+  }
+  return modelColorMap[name];
+}
+
+function recordEloSnapshot() {
+  for (const [model, s] of Object.entries(stats)) {
+    if (!eloHistory[model]) eloHistory[model] = [1000];
+    eloHistory[model].push(s.elo);
+  }
+}
+
+function drawEloChart() {
+  const canvas = document.getElementById('eloChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  // Scale for device pixel ratio
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr;
+  canvas.height = canvas.clientHeight * dpr;
+  ctx.scale(dpr, dpr);
+
+  const W = canvas.clientWidth;
+  const H = canvas.clientHeight;
+  const pad = { top: 20, right: 20, bottom: 30, left: 50 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  // Clear
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  // Collect all data points
+  const allPoints = [];
+  const models = Object.keys(eloHistory);
+  for (const pts of Object.values(eloHistory)) allPoints.push(...pts);
+  if (allPoints.length === 0) {
+    ctx.fillStyle = '#484f58';
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('No ELO data yet', W / 2, H / 2);
+    return;
+  }
+
+  const minElo = Math.min(...allPoints) - 10;
+  const maxElo = Math.max(...allPoints) + 10;
+  const maxLen = Math.max(...models.map(m => eloHistory[m].length));
+
+  // Draw grid lines
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  const gridLines = 5;
+  for (let i = 0; i <= gridLines; i++) {
+    const y = pad.top + (plotH / gridLines) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    const val = Math.round(maxElo - ((maxElo - minElo) / gridLines) * i);
+    ctx.fillStyle = '#484f58';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(String(val), pad.left - 6, y + 4);
+  }
+
+  // Draw lines for each model
+  models.forEach((model, idx) => {
+    const pts = eloHistory[model];
+    const color = modelColor(model);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (let i = 0; i < pts.length; i++) {
+      const x = pad.left + (i / Math.max(maxLen - 1, 1)) * plotW;
+      const y = pad.top + ((maxElo - pts[i]) / (maxElo - minElo)) * plotH;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Label at end of line
+    const lastX = pad.left + ((pts.length - 1) / Math.max(maxLen - 1, 1)) * plotW;
+    const lastY = pad.top + ((maxElo - pts[pts.length - 1]) / (maxElo - minElo)) * plotH;
+    ctx.fillStyle = color;
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(label(model), lastX + 4, lastY + 3);
+  });
+}
+
+// ── Reports ──
+async function loadReports() {
+  try {
+    // Load report files list
+    const filesResp = await fetch('/api/reports');
+    const filesData = await filesResp.json();
+
+    // Load tournament status for rankings
+    const statusResp = await fetch('/api/tournament/status');
+    const statusData = await statusResp.json();
+
+    let html = '';
+
+    // Rankings from last tournament
+    if (statusData.hasResult && statusData.result) {
+      const result = statusData.result;
+      window._lastResult = result;
+      html += '<h3 style="color:var(--gold);margin-bottom:12px">🏆 Final Rankings</h3>';
+      html += '<table class="elo-table"><thead><tr><th>#</th><th>Model</th><th>ELO</th><th>W/L/D</th><th>Win%</th></tr></thead><tbody>';
+      result.stats.sort((a, b) => b.elo - a.elo).forEach((s, i) => {
+        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1);
+        const winPct = s.matchesPlayed > 0 ? (s.wins / s.matchesPlayed * 100).toFixed(0) : '—';
+        const name = s.isHeuristic ? '🤖 heuristic' : s.model;
+        html += '<tr><td>' + medal + '</td><td><strong>' + name + '</strong></td><td>' + s.elo +
+          '</td><td>' + s.wins + '/' + s.losses + '/' + s.draws + '</td><td>' + winPct + '%</td></tr>';
+      });
+      html += '</tbody></table>';
+
+      // Class performance breakdown
+      const hasClassData = result.stats.some(s =>
+        s.battlesAsWarrior || s.battlesAsMage || s.battlesAsRogue || s.battlesAsPaladin
+      );
+      if (hasClassData) {
+        html += '<h3 style="color:var(--accent);margin-top:16px;margin-bottom:8px">🎭 Class Performance</h3>';
+        html += '<table class="elo-table" style="font-size:12px"><thead><tr><th>Model</th><th>⚔️ Warrior</th><th>🔮 Mage</th><th>🗡️ Rogue</th><th>🛡️ Paladin</th></tr></thead><tbody>';
+        result.stats.sort((a, b) => b.elo - a.elo).forEach(s => {
+          const name = s.isHeuristic ? '🤖 heuristic' : s.model;
+          const classCell = (battles, wins) => {
+            if (battles === 0) return '<td style="color:var(--dim)">—</td>';
+            const pct = Math.round(wins / battles * 100);
+            const color = pct >= 60 ? 'var(--green)' : pct >= 40 ? 'var(--yellow)' : 'var(--red)';
+            return '<td><span style="color:' + color + '">' + wins + '/' + battles + ' (' + pct + '%)</span></td>';
+          };
+          html += '<tr><td><strong>' + name + '</strong></td>' +
+            classCell(s.battlesAsWarrior, s.winsAsWarrior) +
+            classCell(s.battlesAsMage, s.winsAsMage) +
+            classCell(s.battlesAsRogue, s.winsAsRogue) +
+            classCell(s.battlesAsPaladin, s.winsAsPaladin) +
+            '</tr>';
+        });
+        html += '</tbody></table>';
+      }
+      html += '<h3 style="color:var(--accent);margin-top:24px;margin-bottom:12px">⚔️ Matchups</h3>';
+      html += '<table class="elo-table"><thead><tr><th>Model A</th><th>Model B</th><th>Score</th><th>Winner</th></tr></thead><tbody>';
+      result.matchups.forEach(m => {
+        const a = m.modelA === HB ? '🤖 heuristic' : m.modelA;
+        const b = m.modelB === HB ? '🤖 heuristic' : m.modelB;
+        const winner = m.winsA > m.winsB ? a : m.winsB > m.winsA ? b : 'Draw';
+        html += '<tr><td>' + a + '</td><td>' + b + '</td><td>' + m.winsA + '–' + m.winsB +
+          (m.draws > 0 ? ' (' + m.draws + 'D)' : '') + '</td><td><strong>' + winner + '</strong></td></tr>';
+      });
+      html += '</tbody></table>';
+
+      // Head-to-head matrix
+      const models = [...new Set(result.matchups.flatMap(m => [m.modelA, m.modelB]))];
+      if (models.length >= 2) {
+        html += '<h3 style="color:var(--accent);margin-top:24px;margin-bottom:8px">📋 Head-to-Head</h3>';
+        html += '<div style="overflow-x:auto"><table class="h2h-matrix" style="border-collapse:collapse;font-size:12px">';
+        html += '<tr><th style="padding:4px 8px"></th>';
+        models.forEach(m => { html += '<th style="padding:4px 8px;writing-mode:vertical-rl;text-orientation:mixed;max-width:30px">' + (m.length > 12 ? m.substring(0,10) + '..' : m) + '</th>'; });
+        html += '</tr>';
+        models.forEach(row => {
+          html += '<tr><td style="padding:4px 8px;font-weight:bold;white-space:nowrap">' + (row.length > 12 ? row.substring(0,10) + '..' : row) + '</td>';
+          models.forEach(col => {
+            if (row === col) {
+              html += '<td style="padding:4px 8px;background:var(--surface);text-align:center">—</td>';
+            } else {
+              const mu = result.matchups.find(m => m.modelA === row && m.modelB === col);
+              if (mu) {
+                const pct = mu.gamesPlayed > 0 ? Math.round(mu.winsA / mu.gamesPlayed * 100) : 0;
+                const bg = pct > 60 ? 'var(--green)' : pct < 40 ? 'var(--red)' : 'var(--yellow)';
+                html += '<td style="padding:4px 8px;text-align:center;background:' + bg + '22;border-radius:4px;cursor:pointer" onclick="showMatchupDetail(&apos;' + row + '&apos;,&apos;' + col + '&apos;)" title="' + row + ' vs ' + col + '"><strong>' + mu.winsA + '</strong>–' + mu.winsB + '</td>';
+              } else {
+                html += '<td style="padding:4px 8px;text-align:center;color:var(--dim)">—</td>';
+              }
+            }
+          });
+          html += '</tr>';
+        });
+        html += '</table></div>';
+      }
+
+      // Game viewer — clickable game list
+      html += '<h3 style="color:var(--accent);margin-top:24px;margin-bottom:8px">🎮 Games</h3>';
+      html += '<div id="gameList">';
+      result.matchups.forEach((m, mi) => {
+        const a = m.modelA === HB ? '🤖 heuristic' : m.modelA;
+        const b = m.modelB === HB ? '🤖 heuristic' : m.modelB;
+        m.games.forEach((g, gi) => {
+          const winner = g.winner === 'A' ? a : g.winner === 'B' ? b : 'Draw';
+          html += '<div class="game-chip" data-mi="' + mi + '" data-gi="' + gi + '" onclick="viewGame(' + mi + ',' + gi + ')">';
+          html += '<strong>' + a + ' (' + g.classA + ') vs ' + b + ' (' + g.classB + ')</strong>';
+          html += ' <span style="color:var(--dim)">' + g.turns + ' turns</span>';
+          html += ' <span style="color:var(--green)">' + winner + ' won</span>';
+          html += '</div>';
+        });
+      });
+      html += '</div>';
+      html += '<div id="gameViewer" style="display:none;margin-top:12px">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+      html += '<h4 id="gameViewerTitle" style="margin:0"></h4>';
+      html += '<div style="display:flex;gap:4px">';
+      html += '<a id="gameExportLink" href="#" class="btn btn-ghost" style="display:none;text-decoration:none;padding:2px 8px;font-size:12px">📥 Export CSV</a>';
+      html += '<button class="btn btn-ghost" onclick="document.getElementById(&quot;gameViewer&quot;).style.display=&quot;none&quot;">✕ Close</button>';
+      html += '</div></div>';
+      html += '<div id="gameViewerContent" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;max-height:400px;overflow-y:auto;font-size:13px;line-height:1.6"></div>';
+      html += '</div>';
+
+      // Model comparison chart
+      html += '<h3 style="color:var(--accent);margin-top:24px;margin-bottom:8px">📊 Model Comparison</h3>';
+      html += '<canvas id="compareChart" width="700" height="180" style="width:100%;height:180px;background:var(--surface);border:1px solid var(--border);border-radius:8px"></canvas>';
+
+      // Export buttons
+      html += '<div style="margin-top:16px;display:flex;gap:8px">';
+      html += '<a href="/api/export/json" class="btn btn-ghost" style="flex:1;text-align:center;text-decoration:none">📦 Export JSON</a>';
+      html += '<a href="/api/export/csv" class="btn btn-ghost" style="flex:1;text-align:center;text-decoration:none">📊 Export CSV</a>';
+      html += '</div>';
+    }
+
+    // Report files
+    if (filesData.reports && filesData.reports.length > 0) {
+      html += '<h3 style="color:var(--accent);margin-top:24px;margin-bottom:12px">📄 Report Files</h3>';
+      html += '<ul class="report-list">';
+      filesData.reports.forEach(f => {
+        const size = (f.size / 1024).toFixed(1);
+        const date = new Date(f.modified).toLocaleString();
+        html += '<li><a href="/report/' + encodeURIComponent(f.path) + '">' + f.name + '</a>' +
+          '<span class="meta">' + size + ' KB • ' + date + '</span>' +
+          '<a class="view-btn" href="/report/' + encodeURIComponent(f.path) + '" target="_blank">View</a></li>';
+      });
+      html += '</ul>';
+    }
+
+    // Tournament history
+    try {
+      const histResp = await fetch('/api/history');
+      const histData = await histResp.json();
+      if (histData.history && histData.history.length > 0) {
+        html += '<h3 style="color:var(--accent);margin-top:24px;margin-bottom:12px">📜 Tournament History</h3>';
+        html += '<table class="elo-table"><thead><tr><th>Date</th><th>Models</th><th>Winner</th><th>ELO</th><th>Games</th><th></th></tr></thead><tbody>';
+        histData.history.forEach(h => {
+          const date = new Date(h.date).toLocaleString();
+          const winner = h.winner === 'heuristic-baseline' ? '🤖 heuristic' : h.winner;
+          const topElo = h.stats[0] ? h.stats[0].elo : '—';
+          const models = h.models.map(m => m === 'heuristic-baseline' ? '🤖' : m).join(', ');
+          const gameCount = h.result?.matchups?.reduce((s, m) => s + m.gamesPlayed, 0) || 0;
+          html += '<tr style="cursor:pointer" onclick="viewHistory(&apos;' + h.id + '&apos;)">';
+          html += '<td>' + date + '</td><td>' + models + '</td><td><strong>' + winner + '</strong></td><td>' + topElo + '</td><td>' + gameCount + ' games</td>';
+          html += '<td><button class="btn btn-ghost" style="padding:2px 8px;font-size:12px">View</button></td>';
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+        html += '<div id="historyViewer" style="display:none;margin-top:12px">';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+        html += '<h4 id="historyTitle" style="margin:0"></h4>';
+        html += '<button class="btn btn-ghost" onclick="document.getElementById(&quot;historyViewer&quot;).style.display=&quot;none&quot;">✕ Close</button>';
+        html += '</div>';
+        html += '<div id="historyContent" style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px;max-height:500px;overflow-y:auto"></div>';
+        html += '</div>';
+      }
+    } catch { /* history not available */ }
+
+    if (!html) {
+      html = '<div class="empty-state"><div class="icon">📄</div>' +
+        '<p>Run a tournament to generate reports.</p></div>';
+    }
+
+    document.getElementById('reportContent').innerHTML = html;
+    drawCompareChart();
+  } catch (e) {
+    document.getElementById('reportContent').innerHTML =
+      '<p class="error">Failed to load reports: ' + e.message + '</p>';
+  }
+}
+
+// ── Compare Chart ──
+function drawCompareChart() {
+  const canvas = document.getElementById('compareChart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr;
+  canvas.height = canvas.clientHeight * dpr;
+  ctx.scale(dpr, dpr);
+
+  const W = canvas.clientWidth;
+  const H = canvas.clientHeight;
+  const pad = { top: 10, right: 20, bottom: 40, left: 50 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  ctx.fillStyle = '#0d1117';
+  ctx.fillRect(0, 0, W, H);
+
+  // Get tournament results from stored data
+  const result = window._lastResult;
+  if (!result || !result.stats) return;
+  const sorted = [...result.stats].sort((a, b) => b.elo - a.elo);
+  if (sorted.length === 0) {
+    ctx.fillStyle = '#484f58';
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('No data', W / 2, H / 2);
+    return;
+  }
+
+  const models = sorted.map(s => label(s.model));
+  const elos = sorted.map(s => s.elo);
+  const maxElo = Math.max(...elos, 1100);
+  const minElo = Math.min(...elos, 900);
+  const barW = Math.min(60, (plotW / models.length) * 0.6);
+  const gap = plotW / models.length;
+
+  // Grid
+  ctx.strokeStyle = '#21262d';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (plotH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    const val = Math.round(maxElo - ((maxElo - minElo) / 4) * i);
+    ctx.fillStyle = '#484f58'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(String(val), pad.left - 6, y + 3);
+  }
+
+  // Bars
+  models.forEach((name, i) => {
+    const x = pad.left + gap * i + (gap - barW) / 2;
+    const elo = elos[i];
+    const barH = ((elo - minElo) / (maxElo - minElo)) * plotH;
+    const y = pad.top + plotH - barH;
+    const color = modelColor(sorted[i].model);
+
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.roundRect(x, y, barW, barH, 4);
+    ctx.fill();
+
+    // ELO label on top of bar
+    ctx.fillStyle = '#e6edf3';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(String(elo), x + barW / 2, y - 4);
+
+    // Model name below
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '10px monospace';
+    ctx.save();
+    ctx.translate(x + barW / 2, pad.top + plotH + 12);
+    ctx.rotate(-0.3);
+    ctx.fillText(name.length > 12 ? name.slice(0, 11) + '\u2026' : name, 0, 0);
+    ctx.restore();
+  });
+}
+
+// ── Game Viewer ──
+// ── History Viewer ──
+async function viewHistory(historyId) {
+  const viewer = document.getElementById('historyViewer');
+  const title = document.getElementById('historyTitle');
+  const content = document.getElementById('historyContent');
+  viewer.style.display = 'block';
+  title.textContent = 'Loading...';
+  content.innerHTML = '<span class="info">Loading...</span>';
+  try {
+    const resp = await fetch('/api/history/' + historyId);
+    if (!resp.ok) throw new Error('Not found');
+    const data = await resp.json();
+    title.textContent = new Date(data.date).toLocaleString();
+    let html = '';
+    // Rankings
+    if (data.stats && data.stats.length > 0) {
+      html += '<h4 style="color:var(--gold);margin-bottom:8px">🏆 Rankings</h4>';
+      html += '<table class="elo-table"><thead><tr><th>#</th><th>Model</th><th>ELO</th><th>W/L/D</th></tr></thead><tbody>';
+      data.stats.forEach((s, i) => {
+        const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1);
+        html += '<tr><td>' + medal + '</td><td>' + s.model + '</td><td>' + s.elo + '</td><td>' + s.wins + '/' + s.losses + '/' + s.draws + '</td></tr>';
+      });
+      html += '</tbody></table>';
+    }
+    // Games
+    if (data.result && data.result.matchups) {
+      html += '<h4 style="color:var(--accent);margin-top:16px;margin-bottom:8px">⚔️ Games</h4>';
+      data.result.matchups.forEach((m, mi) => {
+        m.games.forEach((g, gi) => {
+          const a = m.modelA;
+          const b = m.modelB;
+          const winner = g.winner === 'A' ? a : g.winner === 'B' ? b : 'Draw';
+          html += '<div style="padding:4px 8px;margin:2px 0;background:var(--surface);border-radius:4px;font-size:13px">';
+          html += a + ' (' + g.classA + ') vs ' + b + ' (' + g.classB + ') — <strong>' + winner + '</strong> (' + g.turns + ' turns' + (g.durationMs ? ', ' + (g.durationMs / 1000).toFixed(1) + 's' : '') + ')' + (g.error ? ' <span style="color:var(--red)">⚠️ ' + g.error + '</span>' : '');
+          if (g.turnLog && g.turnLog.length > 0) {
+            html += ' <span class="info" style="font-size:11px">' + g.turnLog.length + ' events</span>';
+          }
+          html += '</div>';
+        });
+      });
+    }
+    if (!html) html = '<span class="info">No details available</span>';
+    content.innerHTML = html;
+  } catch(e) {
+    content.innerHTML = '<span class="loss">Failed to load history entry</span>';
+  }
+}
+
+function showMatchupDetail(modelA, modelB) {
+  const container = document.getElementById('gameList');
+  if (!container) return;
+  const result = window._lastResult;
+  if (!result) return;
+  // Find matchup between these two models
+  const muIdx = result.matchups.findIndex(m => m.modelA === modelA && m.modelB === modelB);
+  if (muIdx === -1) return;
+  const mu = result.matchups[muIdx];
+  let html = '<div style="padding:8px;background:var(--surface);border-radius:8px;margin-bottom:12px">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">';
+  html += '<strong>' + modelA + ' vs ' + modelB + '</strong>';
+  html += '<span style="color:var(--dim)">' + mu.winsA + '–' + mu.winsB + (mu.draws > 0 ? ' (' + mu.draws + ' draws)' : '') + '</span>';
+  html += '</div>';
+  mu.games.forEach((g, gi) => {
+    const w = g.winner === 'A' ? modelA : g.winner === 'B' ? modelB : 'Draw';
+    const color = g.winner === 'draw' ? 'var(--yellow)' : g.winner === 'A' ? 'var(--green)' : 'var(--red)';
+    html += '<div style="padding:4px 8px;margin:2px 0;border-left:3px solid ' + color + ';background:var(--bg);border-radius:0 4px 4px 0;cursor:pointer" onclick="viewGame(' + muIdx + ',' + gi + ')">';
+    html += '<strong>Game ' + (gi+1) + '</strong>: ' + g.classA + ' vs ' + g.classB + ' → <span style="color:' + color + '">' + w + '</span> (' + g.turns + ' turns' + (g.durationMs ? ', ' + (g.durationMs / 1000).toFixed(1) + 's' : '') + ')' + (g.error ? ' <span style="color:var(--red)">⚠️</span>' : '');
+    html += '</div>';
+  });
+  html += '<div style="margin-top:8px"><button class="btn btn-ghost" onclick="renderReports()">← Back to all games</button></div>';
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+async function viewGame(matchupIdx, gameIdx) {
+  const viewer = document.getElementById('gameViewer');
+  const title = document.getElementById('gameViewerTitle');
+  const content = document.getElementById('gameViewerContent');
+  viewer.style.display = 'block';
+  title.textContent = 'Loading...';
+  content.innerHTML = '<span class="info">Loading game log...</span>';
+  try {
+    const resp = await fetch('/api/game/' + matchupIdx + '/' + gameIdx);
+    if (!resp.ok) throw new Error('Not found');
+    const data = await resp.json();
+    title.textContent = (data.modelA || 'Alpha') + ' (' + data.classA + ') vs ' + (data.modelB || 'Beta') + ' (' + data.classB + ') — ' + data.turns + ' turns' + (data.durationMs ? ' (' + (data.durationMs / 1000).toFixed(1) + 's)' : '');
+    // Show export link
+    const exportLink = document.getElementById('gameExportLink');
+    if (exportLink) {
+      exportLink.href = '/api/game/' + matchupIdx + '/' + gameIdx + '/export';
+      exportLink.style.display = 'inline-block';
+    }
+    let html = '';
+    // Winner banner
+    const winner = data.winner === 'A' ? data.modelA : data.winner === 'B' ? data.modelB : 'Draw';
+    html += '<div style="text-align:center;padding:8px;margin-bottom:8px;background:var(--surface);border-radius:6px">';
+    html += '<span style="font-size:18px">🏆 ' + winner + ' wins</span>';
+    html += '</div>';
+    if (data.turnLog && data.turnLog.length > 0) {
+      // Replay controls
+      html += '<div id="replayControls" style="display:flex;align-items:center;gap:8px;padding:6px 8px;margin-bottom:8px;background:var(--surface);border-radius:6px">';
+      html += '<button class="btn btn-ghost" style="padding:2px 8px" onclick="replayStep(-1)" title="Previous turn">⏮</button>';
+      html += '<button class="btn btn-ghost" style="padding:2px 8px" id="replayPlayBtn" onclick="replayToggle()" title="Play/Pause">▶</button>';
+      html += '<button class="btn btn-ghost" style="padding:2px 8px" onclick="replayStep(1)" title="Next turn">⏭</button>';
+      html += '<span id="replayProgress" style="font-size:12px;color:var(--dim)">0/' + data.turnLog.length + '</span>';
+      html += '<select id="replaySpeed" style="font-size:11px;padding:2px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:3px">';
+      html += '<option value="2000">0.5x</option><option value="1000" selected>1x</option><option value="500">2x</option><option value="250">4x</option>';
+      html += '</select>';
+      html += '<button class="btn btn-ghost" style="padding:2px 8px" onclick="replayShowAll()" title="Show all turns at once">📋 All</button>';
+      html += '</div>';
+      html += '<div id="replayContent"></div>';
+      // Store turn log for replay navigation
+      window._replayLog = data.turnLog;
+      window._replayModels = { a: data.modelA || 'Alpha', b: data.modelB || 'Beta' };
+      window._replayIdx = -1;
+      window._replayTimer = null;
+      window._replayPlaying = false;
+    } else {
+      html = '<span class="info">No turn log available</span>';
+    }
+    content.innerHTML = html;
+    // Auto-show first turn
+    if (data.turnLog && data.turnLog.length > 0) replayStep(1);
+  } catch(e) {
+    content.innerHTML = '<span class="loss">Failed to load game log</span>';
+  }
+}
+
+function replayToggle() {
+  if (window._replayPlaying) {
+    clearInterval(window._replayTimer);
+    window._replayPlaying = false;
+    document.getElementById('replayPlayBtn').textContent = '▶';
+  } else {
+    window._replayPlaying = true;
+    document.getElementById('replayPlayBtn').textContent = '⏸';
+    const speed = parseInt(document.getElementById('replaySpeed').value);
+    window._replayTimer = setInterval(() => {
+      if (window._replayIdx < window._replayLog.length - 1) {
+        replayStep(1);
+      } else {
+        clearInterval(window._replayTimer);
+        window._replayPlaying = false;
+        document.getElementById('replayPlayBtn').textContent = '▶';
+      }
+    }, speed);
+  }
+}
+
+function replayStep(dir) {
+  const log = window._replayLog;
+  if (!log) return;
+  window._replayIdx = Math.max(0, Math.min(log.length - 1, window._replayIdx + dir));
+  const idx = window._replayIdx;
+  const t = log[idx];
+  const models = window._replayModels;
+  const hpBar = (hp, maxHp, label) => {
+    const pct = Math.max(0, Math.round(hp / maxHp * 100));
+    const color = pct > 50 ? '#3fb950' : pct > 25 ? '#d29922' : '#f85149';
+    return '<div style="display:inline-block;margin:0 4px">' +
+      '<span style="font-size:11px;color:var(--dim)">' + label + '</span>' +
+      '<div style="background:#21262d;border-radius:3px;width:100px;height:12px;position:relative">' +
+      '<div style="background:' + color + ';border-radius:3px;width:' + pct + '%;height:100%"></div>' +
+      '<span style="position:absolute;left:0;top:0;width:100%;text-align:center;font-size:10px;line-height:12px;color:white;font-weight:bold">' + hp + '/' + maxHp + '</span>' +
+      '</div></div>';
+  };
+  let html = '';
+  // Show all turns up to current
+  for (let i = 0; i <= idx; i++) {
+    const tt = log[i];
+    const current = i === idx ? 'border-left:3px solid var(--accent);padding-left:8px;' : '';
+    html += '<div style="padding:4px 0;border-bottom:1px solid #21262d;' + current + '">';
+    html += '<div style="display:flex;align-items:center;gap:8px">';
+    html += '<span style="color:var(--dim);font-size:11px;white-space:nowrap;min-width:50px">[' + tt.turnNumber + '] ' + tt.actorName + '</span>';
+    html += '<span style="flex:1">' + tt.narrative + '</span>';
+    html += '</div>';
+    html += '<div style="margin-top:2px">' + hpBar(tt.hpA, tt.maxHpA, models.a) + hpBar(tt.hpB, tt.maxHpB, models.b) + '</div>';
+    html += '</div>';
+  }
+  document.getElementById('replayContent').innerHTML = html;
+  document.getElementById('replayProgress').textContent = (idx + 1) + '/' + log.length;
+}
+
+function replayShowAll() {
+  const log = window._replayLog;
+  if (!log) return;
+  window._replayIdx = log.length - 1;
+  if (window._replayPlaying) { clearInterval(window._replayTimer); window._replayPlaying = false; document.getElementById('replayPlayBtn').textContent = '▶'; }
+  replayStep(0); // re-render all
+}
+
+// ── Init: check for existing state ──
+fetch('/api/tournament/status').then(r => r.json()).then(function(data) {
+  if (data.isRunning) {
+    document.getElementById('startBtn').disabled = true;
+    document.querySelector('[data-panel="live"]').click();
+    // Replay past events then connect SSE
+    fetch('/api/tournament/events/replay').then(function(r2) { return r2.json(); }).then(function(replay) {
+      if (replay.events && replay.events.length > 0) {
+        for (var i = 0; i < replay.events.length; i++) {
+          handleEvent(replay.events[i]);
+        }
+        var log = document.getElementById('gameLog');
+        if (log) log.scrollTop = log.scrollHeight;
+      }
+      connectSSE();
+    }).catch(function() { connectSSE(); });
+  } else if (data.hasResult) {
+    loadReports();
+  }
+}).catch(function() {});
+</script>
+<div id="toastContainer" style="position:fixed;top:16px;right:16px;z-index:10000;display:flex;flex-direction:column;gap:8px"></div>
+<script>
+function toast(msg, type) {
+  const el = document.createElement('div');
+  el.style.cssText = 'padding:8px 16px;border-radius:8px;font-size:13px;color:#fff;animation:fadeIn 0.3s;box-shadow:0 2px 8px rgba(0,0,0,0.3);max-width:320px';
+  el.style.background = type === 'error' ? '#f85149' : type === 'success' ? '#3fb950' : '#58a6ff';
+  el.textContent = msg;
+  document.getElementById('toastContainer').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transition = 'opacity 0.3s'; setTimeout(() => el.remove(), 300); }, 3000);
+}
+</script>
+<footer style="text-align:center;padding:16px;color:var(--dim);font-size:12px;border-top:1px solid var(--border);margin-top:24px">
+  ⚔️ D&D Bench • <span id="uptime"></span> • <a href="https://github.com" style="color:var(--accent)">Source</a>
+</footer>
+<script>
+// ── Uptime display ──
+const pageLoadTime = Date.now();
+function updateUptime() {
+  const s = Math.floor((Date.now() - pageLoadTime) / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const el = document.getElementById('uptime');
+  if (el) el.textContent = h > 0 ? h + 'h ' + m + 'm' : m > 0 ? m + 'm ' + (s % 60) + 's' : s + 's';
+}
+setInterval(updateUptime, 1000);
+updateUptime();
+</script>
+</body>
+</html>

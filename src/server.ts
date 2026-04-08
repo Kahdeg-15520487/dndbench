@@ -192,11 +192,6 @@ class GameSession {
   private ws: WebSocket;
   /** All human agents, keyed by character ID */
   private humanAgents = new Map<string, HumanAgent>();
-  /** Convenience: single human agent for 1v1/boss_exam */
-  private get humanAgent(): HumanAgent | undefined {
-    const first = this.humanAgents.values().next().value;
-    return first;
-  }
   private enemyAgent?: IAgent;
   private runner?: BattleRunner;
   private playerChar?: Character;

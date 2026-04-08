@@ -250,7 +250,7 @@ export interface Character {
 // ── Combat Types ──
 export type ActionType =
   | "attack" | "defend" | "cast_spell" | "use_item"
-  | "wait" | "flee" | "class_ability";
+  | "wait" | "flee" | "class_ability" | "dash";
 
 export interface CombatAction {
   type: ActionType;
@@ -266,7 +266,7 @@ export interface DamageResult {
   damage: number;
   wasCrit: boolean;
   wasMiss: boolean;
-  effective: "normal" | "super" | "not_very";
+  effective: "normal";
   targetHp: number;
   targetMaxHp: number;
   statusApplied?: StatusEffectType;

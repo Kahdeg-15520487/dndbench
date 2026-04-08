@@ -22,8 +22,6 @@ import {
   Character,
   CombatAction,
   BattleLog,
-  TurnResult,
-  BattlePhase,
   CombatResult,
   ThinkingStep,
   ArenaConfig,
@@ -37,7 +35,6 @@ import {
   tickCooldowns,
   createSnapshot,
   determineTurnOrder,
-  ARENA_PRESETS,
   ARENA_DEFAULT,
   defaultStartPositions,
   generateStartPositions,
@@ -92,6 +89,8 @@ export class BattleRunner {
   private finished = false;
   private winner?: string;         // winning character id
   private winningTeam?: string;    // winning team tag
+  private defeatedIds = new Set<string>(); // track which characters have had defeat emitted
+  private _hasRun = false;
 
   constructor(
     characters: Character[],
@@ -129,6 +128,8 @@ export class BattleRunner {
 
   /** Run the full battle to completion */
   async run(): Promise<BattleLog> {
+    if (this._hasRun) throw new Error("BattleRunner.run() can only be called once per instance");
+    this._hasRun = true;
     const snapshot = createSnapshot(this.characters, 0, "ongoing", this.arena);
 
     // Notify all agents
@@ -287,10 +288,7 @@ export class BattleRunner {
         this.agentMap.get(target.id)?.onActionResult?.(result);
       }
 
-      // Process status effects on actor and target
-      this.processAllStatusEffects(character, target);
-
-      // Tick cooldowns
+      // Tick cooldowns for this character
       tickCooldowns(character);
 
       // Log the turn
@@ -307,6 +305,7 @@ export class BattleRunner {
         this.finished = true;
         this.winner = target.id;
         this.winningTeam = target.team;
+        this.defeatedIds.add(character.id);
         this.emit({ type: "character_defeated", characterId: character.id });
         this.emit({ type: "battle_end", winner: this.winner, winningTeam: this.winningTeam, reason: `${character.name} fled!` });
         break;
@@ -314,6 +313,14 @@ export class BattleRunner {
 
       // Check for defeat
       if (this.checkDefeat(character, target)) break;
+    }
+
+    // Process status effects once per round (after all characters have acted)
+    if (!this.finished) {
+      this.processRoundEndStatusEffects();
+
+      // Status effects may have killed someone — check defeat
+      this.checkDefeatAfterStatusTick();
     }
 
     // Emit health bars at end of turn
@@ -370,7 +377,10 @@ export class BattleRunner {
     // but status effects could kill them. Check next status tick.
 
     for (const d of dead) {
-      this.emit({ type: "character_defeated", characterId: d.id });
+      if (!this.defeatedIds.has(d.id)) {
+        this.emit({ type: "character_defeated", characterId: d.id });
+        this.defeatedIds.add(d.id);
+      }
     }
 
     // Check win condition
@@ -417,12 +427,64 @@ export class BattleRunner {
 
   // ── Helpers ─────────────────────────────────────────
 
-  private processAllStatusEffects(character: Character, target: Character) {
-    // Process status on all living characters each tick
+  /** Process status effects on ALL living characters once per round */
+  private processRoundEndStatusEffects() {
     for (const c of this.getLiving()) {
       const narratives = processStatusEffects(c);
       if (narratives.length > 0) {
         this.emit({ type: "status_tick", characterId: c.id, narratives });
+      }
+    }
+  }
+
+  /** Check if anyone died from status effects after round-end tick */
+  private checkDefeatAfterStatusTick() {
+    const dead = this.characters.filter(c => c.stats.hp <= 0);
+    for (const d of dead) {
+      // Only emit defeat if not already emitted
+      if (!this.defeatedIds.has(d.id)) {
+        this.emit({ type: "character_defeated", characterId: d.id });
+        this.defeatedIds.add(d.id);
+      }
+    }
+
+    const living = this.getLiving();
+    if (living.length === 0) {
+      this.finished = true;
+      this.emit({ type: "battle_end", reason: "Mutual destruction — draw!" });
+      return;
+    }
+
+    // Re-use the same win condition logic
+    if (this.winCondition === "last_unit_standing") {
+      if (living.length <= 1) {
+        this.finished = true;
+        this.winner = living[0]?.id;
+        this.winningTeam = living[0]?.team;
+        this.emit({
+          type: "battle_end",
+          winner: this.winner,
+          winningTeam: this.winningTeam,
+          reason: living.length === 1
+            ? `${living[0].name} is the last one standing!`
+            : "Everyone is dead — draw!",
+        });
+      }
+    } else {
+      const livingTeams = new Set(living.map(c => c.team));
+      if (livingTeams.size <= 1) {
+        this.finished = true;
+        const survivingTeam = [...livingTeams][0];
+        this.winningTeam = survivingTeam;
+        this.winner = living[0]?.id;
+        this.emit({
+          type: "battle_end",
+          winner: this.winner,
+          winningTeam: this.winningTeam,
+          reason: survivingTeam
+            ? `Team "${survivingTeam}" wins! All enemies defeated!`
+            : "Mutual destruction — draw!",
+        });
       }
     }
   }

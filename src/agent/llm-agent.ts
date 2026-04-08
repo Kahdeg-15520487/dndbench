@@ -87,6 +87,11 @@ export class LLMAgent implements IAgent {
   private enemyId = "";
   /** True while getAction() is awaiting — gates thinking output */
   private turnActive = false;
+  private lastResult = "";
+  /** Tracks the in-flight session.prompt() to prevent overlapping calls */
+  private _pendingPrompt: Promise<void> | null = null;
+  /** Maximum seconds to wait for the LLM to commit an action before falling back */
+  private static readonly TURN_TIMEOUT_MS = 120_000; // 2 minutes
 
   /** Resolve a target name to a character snapshot (fuzzy: name, id, or "self") */
   private resolveTarget(nameOrId: string): BattleStateSnapshot["characters"][0] | undefined {
@@ -153,7 +158,7 @@ export class LLMAgent implements IAgent {
     (modelRegistry as any).registerProvider(providerName, {
       baseUrl,
       api: "openai-completions",
-      apiKey: this.config.apiKey || "no-key",
+      apiKey,
       compat: {
         supportsDeveloperRole: false,
         supportsReasoningEffort: false,
@@ -172,7 +177,7 @@ export class LLMAgent implements IAgent {
     });
 
     // Set runtime API key so pi considers this provider "available"
-    (authStorage as any).setRuntimeApiKey(providerName, this.config.apiKey || "no-key");
+    (authStorage as any).setRuntimeApiKey(providerName, apiKey);
 
     const model = modelRegistry.find(providerName, modelId);
     if (!model) throw new Error(`Model not found: ${providerName}/${modelId}`);
@@ -227,6 +232,7 @@ export class LLMAgent implements IAgent {
         const name = event.toolName;
         const params = event.args ?? event.toolParams ?? event.arguments ?? event.parameters ?? pendingToolParams[name] ?? undefined;
         toolCalls.push(name);
+        console.error(`[${this.name}] tool_call: ${name}(${JSON.stringify(params)?.slice(0, 120)})`);
         this.emitThinking({
           type: "tool_call",
           text: `Using ${name}...`,
@@ -234,6 +240,7 @@ export class LLMAgent implements IAgent {
           toolParams: params,
         });
       } else if (t === "tool_execution_end") {
+        console.error(`[${this.name}] tool_end: ${event.toolName} error=${!!event.isError}`);
         // Extract meaningful text from result
         let resultText = event.isError ? "Error" : "";
         if (event.result) {
@@ -258,6 +265,7 @@ export class LLMAgent implements IAgent {
           toolName: event.toolName,
         });
       } else if (t === "turn_end") {
+        console.error(`[${this.name}] turn_end (tools: ${toolCalls.join(",")})`);
         if (thinkingBuf || toolCalls.length) {
           if (thinkingBuf.trim()) {
             this.emitThinking({
@@ -269,7 +277,17 @@ export class LLMAgent implements IAgent {
         thinkingBuf = "";
         toolCalls = [];
       } else if (t === "agent_end") {
-        // thinking complete
+        console.error(`[${this.name}] agent_end`);
+        // If the agent loop ended without committing an action, resolve with default
+        // to prevent hanging until the turn timeout
+        if (this.turnActive && this.actionResolve) {
+          console.warn(`[${this.name}] agent_end without commitAction — falling back to attack`);
+          this.turnActive = false;
+          const fallback = this.actionResolve;
+          this.actionResolve = null;
+          this.session?.abort().catch(() => {});
+          fallback({ type: "attack", actorId: this.id, targetId: this.enemyId });
+        }
       }
     });
   }
@@ -287,14 +305,39 @@ export class LLMAgent implements IAgent {
 
     if (!this.session) return defaultAction;
 
+    // Clear stale thinking from previous turn
+    this._pendingThinkingSteps = [];
+
     try {
       this.turnActive = true;
-      const action = await new Promise<CombatAction>(async (resolve) => {
+
+      // Wait for any previous prompt to fully settle before sending the next one
+      if (this._pendingPrompt) {
+        await this._pendingPrompt.catch(() => {});
+        this._pendingPrompt = null;
+      }
+
+      const action = await new Promise<CombatAction>((resolve) => {
         this.actionResolve = resolve;
 
-        // Prompt the agent — runs in background
+        // Timeout: if the LLM doesn't commit an action within the limit,
+        // abort and fall back to a default action
+        const timer = setTimeout(() => {
+          if (this.actionResolve) {
+            console.error(`[${this.name}] ⏰ TURN TIMEOUT after ${LLMAgent.TURN_TIMEOUT_MS / 1000}s — falling back to attack`);
+            this.actionResolve = null;
+            this.session?.abort().catch(() => {});
+            this.turnActive = false;
+            resolve(defaultAction);
+          }
+        }, LLMAgent.TURN_TIMEOUT_MS);
+
         const promptText = this.buildTurnPrompt(snapshot);
-        this.session!.prompt(promptText).catch((err) => {
+        console.error(`[${this.name}] → prompt() turn ${this.turnCount}`);
+        const promptPromise = this.session!.prompt(promptText);
+        this._pendingPrompt = promptPromise;
+        promptPromise.catch((err) => {
+          clearTimeout(timer);
           // Abort throws — that's fine if we already resolved
           if (this.actionResolve) {
             console.warn(`[${this.name}] Prompt error: ${err.message}`);
@@ -302,7 +345,23 @@ export class LLMAgent implements IAgent {
             resolve(defaultAction);
           }
         });
+
+        // Clear timeout when action commits normally
+        const origResolve = resolve;
+        this.actionResolve = (action: CombatAction) => {
+          clearTimeout(timer);
+          origResolve(action);
+        };
       });
+
+      // Ensure the prompt fully settles before returning so the session
+      // is idle for the next turn's prompt() call.
+      const settle = this._pendingPrompt as Promise<void> | null;
+      if (settle) {
+        await settle.catch(() => {});
+        this._pendingPrompt = null;
+      }
+      console.error(`[${this.name}] ← prompt settled`);
 
       this.turnActive = false;
       return action;
@@ -316,10 +375,15 @@ export class LLMAgent implements IAgent {
   onActionResult(result: CombatResult): void {
     // Could feed result back to session via steer/followUp
     // For now, we include it in next turn's prompt
+    this.lastResult = result.narrative;
   }
 
-  onBattleEnd(winner: string | undefined, reason: string): void {
-    // Cleanup
+  onBattleEnd(_winner: string | undefined, _reason: string): void {
+    // Abort any in-flight prompt and reset turn state
+    this.turnActive = false;
+    if (this._pendingPrompt) {
+      this.session?.abort().catch(() => {});
+    }
   }
 
   destroy(): void {
@@ -328,7 +392,14 @@ export class LLMAgent implements IAgent {
       this.session.dispose();
       this.session = null;
     }
-    this.actionResolve = null;
+    // Resolve any pending getAction() with default so it doesn't hang
+    if (this.actionResolve) {
+      const resolve = this.actionResolve;
+      this.actionResolve = null;
+      resolve({ type: "wait", actorId: this.id });
+    }
+    this._pendingPrompt = null;
+    this.turnActive = false;
   }
 
   // ── Tool Definitions ────────────────────────────────
@@ -609,6 +680,23 @@ export class LLMAgent implements IAgent {
           actorId: this.id,
         }),
       },
+      {
+        name: "dash",
+        label: "Dash",
+        description: "Dash toward a target at double speed (2x movement). Use to close the gap when out of range.",
+        promptSnippet: "Dash toward the enemy",
+        parameters: Type.Object({
+          target: Type.String({ description: "The enemy to dash toward." }),
+        }),
+        execute: async (_id: any, params: any) => {
+          const tgt = this.resolveTarget(params.target);
+          return this.commitAction({
+            type: "dash",
+            actorId: this.id,
+            targetId: tgt?.id || this.enemyId,
+          });
+        },
+      },
     ];
   }
 
@@ -617,18 +705,21 @@ export class LLMAgent implements IAgent {
     // Stop emitting thinking immediately
     this.turnActive = false;
 
-    // Resolve the Promise in getAction()
+    // Abort the session — agent.abort() sets a flag that stops the agentic
+    // loop after the current tool returns. We don't await abort() because its
+    // waitForIdle() would deadlock (agent is waiting for this tool to return).
+    // The prompt promise will settle once the abort flag takes effect.
+    this.session?.abort().catch(() => {});
+
+    console.error(`[${this.name}] ✓ commitAction: ${action.type}`);
+
+    // Resolve the Promise in getAction() — this unblocks getAction()
+    // which will then await _pendingPrompt to ensure full settlement.
     if (this.actionResolve) {
       const resolve = this.actionResolve;
       this.actionResolve = null;
       resolve(action);
     }
-
-    // Abort the session to stop further processing
-    // Use setImmediate to let the tool result return first
-    setImmediate(() => {
-      this.session?.abort().catch(() => {});
-    });
 
     return {
       content: [{ type: "text" as const, text: `Action committed: ${action.type}` }],
@@ -727,12 +818,5 @@ Your HP: ${me.hp}/${me.maxHp} (${Math.round((me.hp / me.maxHp) * 100)}%) | AC: $
 Position: you(${me.position.x.toFixed(1)},${me.position.y.toFixed(1)})
 ${otherLines.length > 0 ? otherLines.join("\n") : "No other combatants."}
 Observe then act NOW.${lastResult}`;
-  }
-
-  private lastResult = "";
-
-  // Track last result for next turn context
-  onActionResult_(result: CombatResult): void {
-    this.lastResult = result.narrative;
   }
 }

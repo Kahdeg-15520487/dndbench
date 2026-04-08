@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { createCharacter } from "../engine/characters.js";
-import { Character, CombatAction, ARENA_PRESETS } from "../engine/types.js";
+import { CombatAction, ARENA_PRESETS, ClassFeatureId, ItemId } from "../engine/types.js";
 import { DiceRoller } from "../engine/dice.js";
 import {
   resolveAction,
@@ -33,7 +33,7 @@ function makeRiggedDice(overrides: number[]): DiceRoller {
   const real = new DiceRoller(42);
   let idx = 0;
   // Override the d method directly on the instance
-  real.d = function (n: number, ctx: string): number {
+  real.d = function (n: number, _ctx: string): number {
     if (idx < overrides.length) return overrides[idx++];
     // Fall back to real random
     return Math.floor(Math.random() * n) + 1;
@@ -106,7 +106,7 @@ describe("Attack Resolution", () => {
     const result = resolveAction(rogue, mage, action, dice, ARENA_PRESETS.medium);
 
     expect(result.damage!.wasCrit).toBe(true);
-    expect(result.damage!.damageRolls.length).toBeGreaterThanOrEqual(2); // 2d8 for crit
+    expect(result.damage!.damageRolls!.length).toBeGreaterThanOrEqual(2); // 2d8 for crit
     expect(result.damage!.damage).toBe(5 + 6 + 3 + 2 + 2 + 2); // 20
   });
 
@@ -155,7 +155,7 @@ describe("Attack Resolution", () => {
     const action: CombatAction = { type: "attack", actorId: rogue.id, targetId: mage.id };
     const result = resolveAction(rogue, mage, action, dice, ARENA_PRESETS.medium);
 
-    expect(result.damage!.damageRolls.length).toBeGreaterThanOrEqual(4); // 1d8 + 3d6
+    expect(result.damage!.damageRolls!.length).toBeGreaterThanOrEqual(4); // 1d8 + 3d6
     // 6 + 3+4+5 + 3 (DEX mod) = 21
     expect(result.damage!.damage).toBe(21);
   });
@@ -164,17 +164,15 @@ describe("Attack Resolution", () => {
     const paladin = makePaladin("P", "gold", { x: 48, y: 30 });
     const mage = makeMage("M", "blue", { x: 52, y: 30 });
     const slotsBefore = paladin.spellSlots[1]!.total - paladin.spellSlots[1]!.used;
-    // d20=15 (hit), 1d8 weapon=[4], +3 STR = 7 damage
-    // Divine Smite: 2d8=[5,6] = 11 extra
-    // Extra Attack: d20=10 (miss, 10+3+3=16 >= 12 AC... hmm, let's make it clearly miss)
-    // Actually 10+3+3=16 >= 12, so that hits too. Let's make extra attack miss:
-    // d20=2, 2+3+3=8 < 12 = miss. No damage dice needed.
-    const dice = makeRiggedDice([15, 4, 5, 6, 2]);
+    // Dice order: d20=15 (main hit), 1d8=4 (weapon dmg), d20=2 (extra attack miss),
+    // then Divine Smite: 2d8=[5,6] = 11 extra
+    // Total: 4 (weapon) + 3 (STR mod) + 11 (smite) = 18
+    const dice = makeRiggedDice([15, 4, 2, 5, 6]);
     const action: CombatAction = { type: "attack", actorId: paladin.id, targetId: mage.id };
     const result = resolveAction(paladin, mage, action, dice, ARENA_PRESETS.medium);
 
-    // Main attack damage: 4 (weapon) + 3 (STR) + 5 + 6 (smite) = 18
-    // Extra attack: miss, no damage
+    // Main: 4 (weapon) + 3 (STR) = 7, smite: 5+6=11, total = 18
+    // Extra attack: d20=2 → 2+3+3=8 < 12 AC → miss, no damage
     const totalDmg = result.damage!.damage;
     expect(totalDmg).toBe(18);
 
@@ -229,7 +227,6 @@ describe("Spell Resolution", () => {
   it("Fire Bolt doesn't consume spell slot (cantrip)", () => {
     const mage = makeMage();
     const warrior = makeWarrior("W", "red", { x: 90, y: 30 });
-    const slotsBefore = Object.keys(mage.spellSlots).length;
     const dice = makeRiggedDice([15, 5, 6]);
     const action: CombatAction = {
       type: "cast_spell", actorId: mage.id, targetId: warrior.id, spellId: "fire_bolt",
@@ -289,7 +286,6 @@ describe("Spell Resolution", () => {
 
   it("Shield gives +5 AC buff to self", () => {
     const mage = makeMage();
-    const acBefore = mage.stats.ac;
     const dice = new DiceRoller(42);
     const action: CombatAction = {
       type: "cast_spell", actorId: mage.id, targetId: mage.id, spellId: "shield",
@@ -426,7 +422,7 @@ describe("Item Resolution", () => {
 
   it("Alchemist Fire deals 3d6 damage to target", () => {
     const warrior = makeWarrior();
-    const mage = makeMage("M", "blue", { x: 10, y: 30 }); // same position
+    const mage = makeMage("M", "blue", { x: 50, y: 30 }); // within bomb range (20ft)
     // 3d6: [4, 5, 6] = 15
     const dice = makeRiggedDice([4, 5, 6]);
     const action: CombatAction = {
@@ -840,5 +836,907 @@ describe("Evasion", () => {
     expect(result.damage!.saveSuccess).toBe(true);
     expect(result.damage!.damage).toBe(0); // evasion: no damage on success
     expect(rogue.stats.hp).toBe(hpBefore);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Effective AC (Shield + Defend)
+// ══════════════════════════════════════════════════════════
+
+describe("Effective AC", () => {
+  it("defending adds +2 AC", () => {
+    const warrior = makeWarrior("W", "red", { x: 48, y: 30 });
+    const mage = makeMage("M", "blue", { x: 52, y: 30 });
+    // Warrior AC = 16 normally
+    // Without defend: d20=15, +3 STR, +3 prof = 21 >= 12 → hit
+    // Let's set mage as defender
+    mage.isDefending = true;
+    // Mage normal AC = 12, defending AC = 14
+    // d20=13, STR+3, prof+3 = 19 >= 14 → still hit with defend
+    const dice = makeRiggedDice([15, 3, 4, 2]); // hit, damage, extra miss
+    const action: CombatAction = { type: "attack", actorId: warrior.id, targetId: mage.id };
+    const result = resolveAction(warrior, mage, action, dice, ARENA_PRESETS.medium);
+
+    // Should still hit since 21 >= 14, but AC is increased
+    expect(result.damage!.targetAc).toBe(14); // 12 + 2 defend
+  });
+
+  it("shield status effect adds to AC", () => {
+    const warrior = makeWarrior("W", "red", { x: 48, y: 30 });
+    const mage = makeMage("M", "blue", { x: 52, y: 30 });
+    // Add shield status: +5 AC
+    mage.statusEffects.push({ type: "shield", turnsRemaining: 2, potency: 5, sourceId: "m1" });
+    // Mage AC = 12 + 5 = 17
+    // d20=10, STR+3, prof+3 = 16 < 17 → miss!
+    const dice = makeRiggedDice([10]);
+    const action: CombatAction = { type: "attack", actorId: warrior.id, targetId: mage.id };
+    const result = resolveAction(warrior, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.wasMiss).toBe(true);
+    expect(result.damage!.targetAc).toBe(17); // 12 + 5 shield
+  });
+
+  it("defend + shield stacks", () => {
+    const warrior = makeWarrior("W", "red", { x: 48, y: 30 });
+    const mage = makeMage("M", "blue", { x: 52, y: 30 });
+    mage.isDefending = true;
+    mage.statusEffects.push({ type: "shield", turnsRemaining: 2, potency: 5, sourceId: "m1" });
+    // Mage AC = 12 + 2 (defend) + 5 (shield) = 19
+    // d20=15, STR+3, prof+3 = 21 >= 19 → hit
+    const dice = makeRiggedDice([15, 3, 4, 2]);
+    const action: CombatAction = { type: "attack", actorId: warrior.id, targetId: mage.id };
+    const result = resolveAction(warrior, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.targetAc).toBe(19);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Flee Resolution
+// ══════════════════════════════════════════════════════════
+
+describe("Flee Resolution", () => {
+  it("successful flee when at edge of arena", () => {
+    const warrior = makeWarrior("W", "red", { x: 0, y: 30 });
+    const dice = new DiceRoller(42);
+    const action: CombatAction = { type: "flee", actorId: warrior.id };
+    const result = resolveAction(warrior, undefined, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.fled).toBe(true);
+    expect(result.fledSuccessfully).toBe(true);
+    expect(result.narrative).toContain("escapes");
+  });
+
+  it("failed flee when in middle of arena", () => {
+    const warrior = makeWarrior("W", "red", { x: 50, y: 30 });
+    const dice = new DiceRoller(42);
+    const action: CombatAction = { type: "flee", actorId: warrior.id };
+    const result = resolveAction(warrior, undefined, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.fled).toBe(true);
+    expect(result.fledSuccessfully).toBe(false);
+    expect(result.narrative).toContain("can't reach the edge");
+  });
+
+  it("successful flee at right edge", () => {
+    const warrior = makeWarrior("W", "red", { x: 100, y: 30 });
+    const arena = ARENA_PRESETS.medium; // width = 100
+    const dice = new DiceRoller(42);
+    const action: CombatAction = { type: "flee", actorId: warrior.id };
+    const result = resolveAction(warrior, undefined, action, dice, arena);
+
+    expect(result.fledSuccessfully).toBe(true);
+  });
+
+  it("flee dashes toward nearest edge at full speed", () => {
+    const warrior = makeWarrior("W", "red", { x: 50, y: 30 });
+    const arena = ARENA_PRESETS.medium; // width = 100, speed = 30
+    const dice = new DiceRoller(42);
+    const action: CombatAction = { type: "flee", actorId: warrior.id };
+    resolveAction(warrior, undefined, action, dice, arena);
+
+    // Warrior at x=50, right edge is 100 (distance 50), left edge is 0 (distance 50)
+    // Ties go right, so x should be 50 + 30 = 80
+    expect(warrior.position.x).toBe(80);
+    expect(warrior.position.y).toBe(30);
+  });
+
+  it("flee from near left edge reaches it", () => {
+    const warrior = makeWarrior("W", "red", { x: 15, y: 30 });
+    const arena = ARENA_PRESETS.medium; // speed = 30
+    const dice = new DiceRoller(42);
+    const action: CombatAction = { type: "flee", actorId: warrior.id };
+    const result = resolveAction(warrior, undefined, action, dice, arena);
+
+    // Left edge is 15ft away, speed is 30, so should escape
+    expect(result.fledSuccessfully).toBe(true);
+    expect(warrior.position.x).toBe(0);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Dash Action
+// ══════════════════════════════════════════════════════════
+
+describe("Dash Action", () => {
+  it("moves toward target at double speed", () => {
+    const warrior = makeWarrior("W", "red", { x: 10, y: 30 });
+    const mage = makeMage("M", "blue", { x: 80, y: 30 });
+    const arena = ARENA_PRESETS.small; // width 60
+    const dice = new DiceRoller(42);
+    const action: CombatAction = { type: "dash", actorId: warrior.id, targetId: mage.id };
+    const result = resolveAction(warrior, mage, action, dice, arena);
+
+    // Warrior speed is 30, dash = 60ft toward mage at 70ft away
+    // Should end up closer but not at mage
+    expect(result.move).toBeDefined();
+    expect(result.narrative).toContain("dashes");
+    // Distance from start should be close to 60 (capped by arena width)
+    const moved = result.move!.distanceMoved;
+    expect(moved).toBeGreaterThan(30); // more than normal move
+  });
+
+  it("closes the gap from far away", () => {
+    const warrior = makeWarrior("W", "red", { x: 10, y: 30 });
+    const mage = makeMage("M", "blue", { x: 50, y: 30 });
+    const arena = ARENA_PRESETS.small; // width 60, so mage is 40ft away
+    const dice = new DiceRoller(42);
+
+    // Normal move: 30ft, still 10ft short
+    // Dash: 60ft, should reach mage
+    const action: CombatAction = { type: "dash", actorId: warrior.id, targetId: mage.id };
+    resolveAction(warrior, mage, action, dice, arena);
+
+    // Warrior should be right next to mage now
+    const dist = Math.sqrt((warrior.position.x - mage.position.x) ** 2);
+    expect(dist).toBeLessThanOrEqual(MELEE_RANGE + 1); // within melee
+  });
+
+  it("works without a target", () => {
+    const warrior = makeWarrior("W", "red", { x: 30, y: 30 });
+    const arena = ARENA_PRESETS.medium;
+    const dice = new DiceRoller(42);
+    const action: CombatAction = { type: "dash", actorId: warrior.id };
+    const result = resolveAction(warrior, undefined, action, dice, arena);
+
+    expect(result.narrative).toContain("nowhere to go");
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Item Edge Cases
+// ══════════════════════════════════════════════════════════
+
+describe("Item Edge Cases", () => {
+  it("Greater Health Potion heals 14 HP (potency)", () => {
+    const mage = makeMage();
+    mage.stats.hp = 10;
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "use_item", actorId: mage.id, itemId: "greater_health_potion",
+    };
+    const result = resolveAction(mage, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.heal!.amount).toBe(14);
+    expect(mage.stats.hp).toBe(24);
+    const pot = mage.inventory.find(i => i.id === "greater_health_potion")!;
+    expect(pot.quantity).toBe(0);
+  });
+
+  it("Health Potion doesn't overheal", () => {
+    const warrior = makeWarrior();
+    warrior.stats.hp = warrior.stats.maxHp - 3; // missing 3 HP
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "use_item", actorId: warrior.id, itemId: "health_potion",
+    };
+    const result = resolveAction(warrior, warrior, action, dice, ARENA_PRESETS.medium);
+
+    // Potion heals 7 but only 3 missing
+    expect(warrior.stats.hp).toBe(warrior.stats.maxHp);
+    expect(result.heal!.amount).toBe(7); // potion always heals its potency
+  });
+
+  it("using last item removes it from available uses", () => {
+    const warrior = makeWarrior();
+    // Warrior has 1 greater health potion
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "use_item", actorId: warrior.id, itemId: "greater_health_potion",
+    };
+    resolveAction(warrior, warrior, action, dice, ARENA_PRESETS.medium);
+    const pot = warrior.inventory.find(i => i.id === "greater_health_potion")!;
+    expect(pot.quantity).toBe(0);
+
+    // Try using again — should fail (quantity 0)
+    const result2 = resolveAction(warrior, warrior, action, dice, ARENA_PRESETS.medium);
+    expect(result2.narrative).toContain("doesn't have that item");
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Action Surge
+// ══════════════════════════════════════════════════════════
+
+describe("Action Surge", () => {
+  it("Action Surge returns correct narrative", () => {
+    const warrior = makeWarrior();
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "class_ability", actorId: warrior.id, abilityId: "action_surge",
+    };
+    const result = resolveAction(warrior, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.narrative).toContain("Action Surge");
+    expect(result.abilityResult!.name).toBe("Action Surge");
+    expect(result.abilityResult!.value).toBe(1);
+  });
+
+  it("Action Surge can only be used once per battle", () => {
+    const warrior = makeWarrior();
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "class_ability", actorId: warrior.id, abilityId: "action_surge",
+    };
+    resolveAction(warrior, warrior, action, dice, ARENA_PRESETS.medium);
+    const result = resolveAction(warrior, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.narrative).toContain("no uses remaining");
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Rogue Movement (Cunning Action)
+// ══════════════════════════════════════════════════════════
+
+describe("Rogue Movement (Cunning Action)", () => {
+  it("rogue moves faster with Cunning Action (+15)", () => {
+    const rogue = makeRogue("R", "red", { x: 10, y: 30 });
+    const arena = ARENA_PRESETS.medium;
+    // Normal speed 30 + 15 (cunning action) = 45 max move
+    const result = resolveMove(rogue, { dx: 45, dy: 0 }, arena);
+    expect(result.to.x).toBe(55); // 10 + 45
+  });
+
+  it("rogue move clamped to 45 (30+15)", () => {
+    const rogue = makeRogue("R", "red", { x: 10, y: 30 });
+    const arena = ARENA_PRESETS.medium;
+    const result = resolveMove(rogue, { dx: 60, dy: 0 }, arena);
+    expect(result.to.x).toBe(55); // 10 + 45
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Scorching Ray (attack roll spell)
+// ══════════════════════════════════════════════════════════
+
+describe("Scorching Ray", () => {
+  it("hits with spell attack roll", () => {
+    const mage = makeMage("M", "red", { x: 50, y: 30 });
+    const warrior = makeWarrior("W", "blue", { x: 50, y: 30 });
+    // d20=20 (crit!), scorching ray 6d6 doubled to 12d6 on crit: [4,4,4,4,4,4,4,4,4,4,4,4] = 48 + 3 (INT mod) = 51
+    const dice = makeRiggedDice([20, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]);
+    const action: CombatAction = {
+      type: "cast_spell", actorId: mage.id, targetId: warrior.id, spellId: "scorching_ray",
+    };
+    const result = resolveAction(mage, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.wasCrit).toBe(true);
+    expect(result.damage!.damage).toBe(51); // 12*4 + 3 INT mod
+    expect(result.spell!.slotUsed).toBe(2);
+  });
+
+  it("misses when attack roll is low", () => {
+    const mage = makeMage("M", "red", { x: 50, y: 30 });
+    const warrior = makeWarrior("W", "blue", { x: 50, y: 30 });
+    // d20=1 → natural 1 → auto-miss
+    const dice = makeRiggedDice([1]);
+    const action: CombatAction = {
+      type: "cast_spell", actorId: mage.id, targetId: warrior.id, spellId: "scorching_ray",
+    };
+    const result = resolveAction(mage, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.wasMiss).toBe(true);
+    expect(result.damage!.damage).toBe(0);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Thunderwave (save spell with half damage)
+// ══════════════════════════════════════════════════════════
+
+describe("Thunderwave", () => {
+  it("deals full damage on failed CON save", () => {
+    const mage = makeMage("M", "red", { x: 50, y: 30 });
+    const warrior = makeWarrior("W", "blue", { x: 50, y: 30 });
+    // CON save: d20=1, CON 16→+3, prof(str/con) so +3 = 1+3+3=7 < DC 14 → fail
+    // 2d8 thunder: [5, 6] = 11
+    const dice = makeRiggedDice([1, 5, 6]);
+    const action: CombatAction = {
+      type: "cast_spell", actorId: mage.id, targetId: warrior.id, spellId: "thunderwave",
+    };
+    const result = resolveAction(mage, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.saveSuccess).toBe(false);
+    expect(result.damage!.damage).toBe(11);
+  });
+
+  it("deals half damage on successful CON save", () => {
+    const mage = makeMage("M", "red", { x: 50, y: 30 });
+    const warrior = makeWarrior("W", "blue", { x: 50, y: 30 });
+    // CON save: d20=20, CON 16→+3, prof +3 = 26 >= DC 14 → success
+    // 2d8: [6, 6] = 12, halved = 6
+    const dice = makeRiggedDice([20, 6, 6]);
+    const action: CombatAction = {
+      type: "cast_spell", actorId: mage.id, targetId: warrior.id, spellId: "thunderwave",
+    };
+    const result = resolveAction(mage, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.saveSuccess).toBe(true);
+    expect(result.damage!.damage).toBe(6); // 12 / 2
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Shield of Faith
+// ══════════════════════════════════════════════════════════
+
+describe("Shield of Faith", () => {
+  it("applies +2 AC shield buff", () => {
+    const paladin = makePaladin();
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "cast_spell", actorId: paladin.id, targetId: paladin.id, spellId: "shield_of_faith",
+    };
+    const result = resolveAction(paladin, paladin, action, dice, ARENA_PRESETS.medium);
+
+    const shieldEffect = paladin.statusEffects.find(e => e.type === "shield");
+    expect(shieldEffect).toBeDefined();
+    expect(shieldEffect!.potency).toBe(2);
+    expect(shieldEffect!.turnsRemaining).toBe(3);
+    expect(result.spell!.statusApplied).toBe("shield");
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Action History
+// ══════════════════════════════════════════════════════════
+
+describe("Action History", () => {
+  it("records action types in history", () => {
+    const warrior = makeWarrior();
+    const mage = makeMage("M", "blue", { x: 48, y: 30 });
+    const dice = new DiceRoller(42);
+
+    const defend: CombatAction = { type: "defend", actorId: warrior.id };
+    resolveAction(warrior, undefined, defend, dice, ARENA_PRESETS.medium);
+    expect(warrior.actionHistory).toContain("defend");
+
+    const attack: CombatAction = { type: "attack", actorId: warrior.id, targetId: mage.id };
+    resolveAction(warrior, mage, attack, dice, ARENA_PRESETS.medium);
+    expect(warrior.actionHistory).toContain("attack");
+    expect(warrior.actionHistory).toHaveLength(2);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  HP Clamping (damage can't go below 0)
+// ══════════════════════════════════════════════════════════
+
+describe("HP Clamping", () => {
+  it("HP can't go below 0 from attacks", () => {
+    const mage = makeMage("M", "blue", { x: 48, y: 30 });
+    const warrior = makeWarrior("W", "red", { x: 52, y: 30 });
+    // Mage has 27 HP. Warrior crit with lots of damage.
+    // d20=20 (crit), 4d6=[6,6,6,6]=24 + 3 STR = 27
+    // Extra attack: d20=20, 4d6=[6,6,6,6]=24 + 3 = 27
+    // That's 54 damage on a 27 HP mage
+    const dice = makeRiggedDice([20, 6, 6, 6, 6, 20, 6, 6, 6, 6]);
+    const action: CombatAction = { type: "attack", actorId: warrior.id, targetId: mage.id };
+    resolveAction(warrior, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(mage.stats.hp).toBe(0);
+  });
+
+  it("HP can't go below 0 from status effects", () => {
+    const warrior = makeWarrior();
+    warrior.stats.hp = 2;
+    warrior.statusEffects.push({
+      type: "burn", turnsRemaining: 1, potency: 100, sourceId: "x",
+    });
+    processStatusEffects(warrior);
+    expect(warrior.stats.hp).toBe(0);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Multiple Status Effects
+// ══════════════════════════════════════════════════════════
+
+describe("Multiple Status Effects", () => {
+  it("burn and poison apply simultaneously", () => {
+    const warrior = makeWarrior();
+    warrior.statusEffects.push(
+      { type: "burn", turnsRemaining: 1, potency: 3, sourceId: "x" },
+      { type: "poison", turnsRemaining: 1, potency: 4, sourceId: "x" },
+    );
+    processStatusEffects(warrior);
+    expect(warrior.stats.hp).toBe(warrior.stats.maxHp - 7); // 3 + 4
+    expect(warrior.statusEffects).toHaveLength(0); // both expired
+  });
+
+  it("multiple shield effects stack AC", () => {
+    const warrior = makeWarrior("W", "red", { x: 48, y: 30 });
+    const mage = makeMage("M", "blue", { x: 52, y: 30 });
+    mage.statusEffects.push(
+      { type: "shield", turnsRemaining: 1, potency: 5, sourceId: "m" },
+      { type: "shield", turnsRemaining: 1, potency: 2, sourceId: "p" },
+    );
+    // Mage AC = 12 + 5 + 2 = 19
+    // d20=15, STR+3, prof+3 = 21 >= 19 → hit
+    const dice = makeRiggedDice([15, 3, 4, 2]);
+    const action: CombatAction = { type: "attack", actorId: warrior.id, targetId: mage.id };
+    const result = resolveAction(warrior, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.targetAc).toBe(19);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Antidote (Cure Status)
+// ══════════════════════════════════════════════════════════
+
+describe("Antidote / Cure", () => {
+  it("removes all status effects from target", () => {
+    const rogue = makeRogue(); // has antidote
+    rogue.statusEffects.push(
+      { type: "poison", turnsRemaining: 3, potency: 4, sourceId: "x" },
+      { type: "burn", turnsRemaining: 2, potency: 3, sourceId: "y" },
+    );
+    expect(rogue.statusEffects).toHaveLength(2);
+
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "use_item", actorId: rogue.id, itemId: "antidote",
+    };
+    const result = resolveAction(rogue, rogue, action, dice, ARENA_PRESETS.medium);
+
+    expect(rogue.statusEffects).toHaveLength(0);
+    expect(result.item!.effect).toBe("cure");
+    expect(result.narrative).toContain("cured");
+    const pot = rogue.inventory.find(i => i.id === "antidote")!;
+    expect(pot.quantity).toBe(0);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Generic Class Ability
+// ══════════════════════════════════════════════════════════
+
+describe("Generic Class Ability", () => {
+  it("uses feature with generic fallback narrative", () => {
+    const warrior = makeWarrior();
+    warrior.features.push({
+      id: "custom_slash" as ClassFeatureId,
+      name: "Power Slash",
+      description: "A mighty slash",
+      usesPerBattle: 1,
+      usesRemaining: 1,
+    });
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "class_ability", actorId: warrior.id, abilityId: "custom_slash" as ClassFeatureId,
+    };
+    const result = resolveAction(warrior, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.narrative).toContain("Power Slash");
+    expect(result.abilityResult!.name).toBe("Power Slash");
+    expect(result.abilityResult!.description).toBe("A mighty slash");
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Unknown Action Type
+// ══════════════════════════════════════════════════════════
+
+describe("Unknown Action Type", () => {
+  it("returns unknown narrative for invalid action type", () => {
+    const warrior = makeWarrior();
+    const dice = new DiceRoller(42);
+    const action: any = { type: "dance", actorId: warrior.id };
+    const result = resolveAction(warrior, undefined, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.narrative).toContain("unknown");
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Bomb (Damage Item)
+// ══════════════════════════════════════════════════════════
+
+describe("Bomb", () => {
+  it("deals damage and reduces quantity", () => {
+    const warrior = makeWarrior(); // has 2 bombs
+    const mage = makeMage();
+    const mageHpBefore = mage.stats.hp;
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "use_item", actorId: warrior.id, targetId: mage.id, itemId: "bomb",
+    };
+    const result = resolveAction(warrior, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.item!.effect).toBe("damage");
+    expect(result.item!.value).toBeGreaterThan(0);
+    expect(mage.stats.hp).toBeLessThan(mageHpBefore);
+    const bombItem = warrior.inventory.find(i => i.id === "bomb")!;
+    expect(bombItem.quantity).toBe(1); // was 2, now 1
+  });
+
+  it("fails when target is out of range", () => {
+    const warrior = makeWarrior("W", "red", { x: 10, y: 30 });
+    const mage = makeMage("M", "blue", { x: 90, y: 30 }); // 80ft away, bomb range is 20ft
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "use_item", actorId: warrior.id, targetId: mage.id, itemId: "bomb",
+    };
+    const result = resolveAction(warrior, mage, action, dice, ARENA_PRESETS.medium);
+
+    // Bombs check range — item is refunded
+    expect(result.damage).toBeUndefined();
+    expect(result.narrative).toContain("too far away");
+    const bombItem = warrior.inventory.find(i => i.id === "bomb")!;
+    expect(bombItem.quantity).toBe(2); // refunded
+  });
+
+  it("hits when target is within bomb range", () => {
+    const warrior = makeWarrior("W", "red", { x: 40, y: 30 });
+    const mage = makeMage("M", "blue", { x: 50, y: 30 }); // 10ft away, bomb range is 20ft
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "use_item", actorId: warrior.id, targetId: mage.id, itemId: "bomb",
+    };
+    const result = resolveAction(warrior, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage).toBeDefined();
+    expect(result.damage!.damage).toBeGreaterThan(0);
+    expect(result.narrative).toContain("Alchemist Fire");
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Magic Missile (Auto-hit Spell)
+// ══════════════════════════════════════════════════════════
+
+describe("Magic Missile", () => {
+  it("auto-hits without attack roll", () => {
+    const mage = makeMage("M", "red", { x: 50, y: 30 });
+    const warrior = makeWarrior("W", "blue", { x: 50, y: 30 });
+    const dice = makeRiggedDice([4, 4, 4]); // 3d4 = 12 + 3 = 15
+    const action: CombatAction = {
+      type: "cast_spell", actorId: mage.id, targetId: warrior.id, spellId: "magic_missile",
+    };
+    const result = resolveAction(mage, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.wasMiss).toBe(false);
+    expect(result.damage!.damage).toBe(15);
+    expect(result.damage!.wasCrit).toBe(false);
+    expect(result.spell!.slotUsed).toBe(1);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Natural 1 & Natural 20
+// ══════════════════════════════════════════════════════════
+
+describe("Natural 1 & Natural 20", () => {
+  it("natural 1 always misses regardless of total", () => {
+    const warrior = makeWarrior("W", "red", { x: 48, y: 30 });
+    const mage = makeMage("M", "blue", { x: 52, y: 30 });
+    const dice = makeRiggedDice([1]);
+    const action: CombatAction = { type: "attack", actorId: warrior.id, targetId: mage.id };
+    const result = resolveAction(warrior, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.wasMiss).toBe(true);
+    expect(result.damage!.damage).toBe(0);
+  });
+
+  it("natural 20 always hits and doubles weapon dice", () => {
+    const warrior = makeWarrior("W", "red", { x: 48, y: 30 });
+    const mage = makeMage("M", "blue", { x: 52, y: 30 });
+    (mage as any).stats.ac = 100;
+    const dice = makeRiggedDice([20, 3, 3, 3, 3, 2]);
+    const action: CombatAction = { type: "attack", actorId: warrior.id, targetId: mage.id };
+    const result = resolveAction(warrior, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.wasCrit).toBe(true);
+    expect(result.damage!.damage).toBe(15); // 4*3 + 3 STR
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Arcane Recovery Edge Cases
+// ══════════════════════════════════════════════════════════
+
+describe("Arcane Recovery Edge Cases", () => {
+  it("recovers highest level slot with available used", () => {
+    const mage = makeMage();
+    mage.spellSlots[1]!.used = 4;
+    mage.spellSlots[2]!.used = 3;
+    mage.spellSlots[3]!.used = 2;
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "class_ability", actorId: mage.id, abilityId: "arcane_recovery",
+    };
+    const result = resolveAction(mage, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(mage.spellSlots[3]!.used).toBe(1);
+    expect(mage.spellSlots[2]!.used).toBe(3);
+    expect(result.narrative).toContain("3rd");
+  });
+
+  it("reports no slots when all are full", () => {
+    const mage = makeMage();
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "class_ability", actorId: mage.id, abilityId: "arcane_recovery",
+    };
+    const result = resolveAction(mage, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.narrative).toContain("no slots to recover");
+    expect(result.abilityResult!.value).toBe(0);
+  });
+
+  it("uses 1st ordinal when recovering level 1 slot", () => {
+    const mage = makeMage();
+    // Only level 1 slot has used slots
+    mage.spellSlots[1]!.used = 4;
+    mage.spellSlots[2]!.used = 0;
+    mage.spellSlots[3]!.used = 0;
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "class_ability", actorId: mage.id, abilityId: "arcane_recovery",
+    };
+    const result = resolveAction(mage, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(mage.spellSlots[1]!.used).toBe(3);
+    expect(result.narrative).toContain("1st");
+  });
+
+  it("uses 2nd ordinal when recovering level 2 slot", () => {
+    const mage = makeMage();
+    mage.spellSlots[1]!.used = 0;
+    mage.spellSlots[2]!.used = 2;
+    mage.spellSlots[3]!.used = 0;
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "class_ability", actorId: mage.id, abilityId: "arcane_recovery",
+    };
+    const result = resolveAction(mage, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(mage.spellSlots[2]!.used).toBe(1);
+    expect(result.narrative).toContain("2nd");
+  });
+
+  it("uses 'th' ordinal for 4th level and above", () => {
+    const mage = makeMage();
+    // Add a level 4 slot and use it
+    (mage.spellSlots as any)[4] = { total: 1, used: 1 };
+    mage.spellSlots[1]!.used = 0;
+    mage.spellSlots[2]!.used = 0;
+    mage.spellSlots[3]!.used = 0;
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "class_ability", actorId: mage.id, abilityId: "arcane_recovery",
+    };
+    const result = resolveAction(mage, mage, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.narrative).toContain("4th");
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Lay on Hands Edge Cases
+// ══════════════════════════════════════════════════════════
+
+describe("Lay on Hands Edge Cases", () => {
+  it("doesn't overheal", () => {
+    const paladin = makePaladin();
+    paladin.stats.hp = paladin.stats.maxHp;
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "class_ability", actorId: paladin.id, abilityId: "lay_on_hands",
+    };
+    const result = resolveAction(paladin, paladin, action, dice, ARENA_PRESETS.medium);
+
+    expect(paladin.stats.hp).toBe(paladin.stats.maxHp);
+    expect(result.heal!.amount).toBe(0);
+  });
+
+  it("uses remaining are decremented", () => {
+    const paladin = makePaladin();
+    paladin.stats.hp = 10;
+    const loh = paladin.features.find(f => f.id === "lay_on_hands")!;
+    const before = loh.usesRemaining;
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "class_ability", actorId: paladin.id, abilityId: "lay_on_hands",
+    };
+    resolveAction(paladin, paladin, action, dice, ARENA_PRESETS.medium);
+
+    expect(loh.usesRemaining).toBe(before - 1);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Unknown Item Type Fallback
+// ══════════════════════════════════════════════════════════
+
+describe("Unknown Item Type", () => {
+  it("uses generic narrative for unrecognized item type", () => {
+    const warrior = makeWarrior();
+    // Manually add a custom item with unknown type
+    warrior.inventory.push({
+      id: "custom_item" as ItemId, name: "Weird Thing", description: "",
+      quantity: 1, type: "teleport" as any, potency: 0, range: 0,
+    });
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "use_item", actorId: warrior.id, itemId: "custom_item" as ItemId,
+    };
+    const result = resolveAction(warrior, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.narrative).toContain("Weird Thing");
+    expect(result.item!.effect).toBe("unknown");
+    expect(result.item!.value).toBe(0);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Unknown Ability
+// ══════════════════════════════════════════════════════════
+
+describe("Unknown Ability", () => {
+  it("reports missing ability", () => {
+    const warrior = makeWarrior();
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "class_ability", actorId: warrior.id, abilityId: "nonexistent",
+    };
+    const result = resolveAction(warrior, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.narrative).toContain("doesn't have ability");
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Paralyzed Character
+// ══════════════════════════════════════════════════════════
+
+describe("Paralyzed Status", () => {
+  it("paralyzed effect decrements each turn", () => {
+    const warrior = makeWarrior();
+    warrior.statusEffects.push({
+      type: "paralyzed", turnsRemaining: 2, potency: 0, sourceId: "x",
+    });
+    processStatusEffects(warrior);
+    expect(warrior.statusEffects).toHaveLength(1);
+    expect(warrior.statusEffects[0].turnsRemaining).toBe(1);
+  });
+
+  it("paralyzed expires after turns run out", () => {
+    const warrior = makeWarrior();
+    warrior.statusEffects.push({
+      type: "paralyzed", turnsRemaining: 1, potency: 0, sourceId: "x",
+    });
+    processStatusEffects(warrior);
+    expect(warrior.statusEffects).toHaveLength(0);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Hold Person (Paralyze via Spell)
+// ══════════════════════════════════════════════════════════
+
+describe("Hold Person", () => {
+  it("paralyzes target on failed WIS save", () => {
+    const mage = makeMage("M", "red", { x: 50, y: 30 });
+    const warrior = makeWarrior("W", "blue", { x: 50, y: 30 });
+    // Warrior WIS 12→+1, prof +3 (str/con) so WIS save = d20+1
+    // d20=1, +1 = 2 < DC 14 → fail
+    const dice = makeRiggedDice([1]);
+    const action: CombatAction = {
+      type: "cast_spell", actorId: mage.id, targetId: warrior.id, spellId: "hold_person",
+    };
+    const result = resolveAction(mage, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.saveSuccess).toBe(false);
+    expect(warrior.statusEffects).toHaveLength(1);
+    expect(warrior.statusEffects[0].type).toBe("paralyzed");
+    expect(warrior.statusEffects[0].turnsRemaining).toBe(1);
+    expect(result.spell!.statusApplied).toBe("paralyzed");
+  });
+
+  it("does not paralyze on successful WIS save", () => {
+    const mage = makeMage("M", "red", { x: 50, y: 30 });
+    const warrior = makeWarrior("W", "blue", { x: 50, y: 30 });
+    // WIS save: d20=20, +1 = 21 >= DC 14 → success
+    const dice = makeRiggedDice([20]);
+    const action: CombatAction = {
+      type: "cast_spell", actorId: mage.id, targetId: warrior.id, spellId: "hold_person",
+    };
+    const result = resolveAction(mage, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.saveSuccess).toBe(true);
+    expect(warrior.statusEffects).toHaveLength(0);
+    expect(result.spell!.statusApplied).toBeUndefined();
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Lightning Bolt
+// ══════════════════════════════════════════════════════════
+
+describe("Lightning Bolt", () => {
+  it("deals damage with DEX save", () => {
+    const mage = makeMage("M", "red", { x: 50, y: 30 });
+    const warrior = makeWarrior("W", "blue", { x: 50, y: 30 });
+    // DEX save: d20=1, DEX 14→+2, prof(str/con) → +2 = 3 < DC 14 → fail
+    // 8d6: [1,1,1,1,1,1,1,1] = 8
+    const dice = makeRiggedDice([1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    const action: CombatAction = {
+      type: "cast_spell", actorId: mage.id, targetId: warrior.id, spellId: "lightning_bolt",
+    };
+    const result = resolveAction(mage, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.damage!.saveSuccess).toBe(false);
+    expect(result.damage!.damage).toBe(8);
+    expect(result.spell!.slotUsed).toBe(3);
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Unknown Spell
+// ══════════════════════════════════════════════════════════
+
+describe("Unknown Spell", () => {
+  it("returns unknown spell narrative for nonexistent spellId", () => {
+    const mage = makeMage();
+    const warrior = makeWarrior();
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "cast_spell",
+      actorId: mage.id,
+      spellId: "nonexistent_spell",
+    };
+    const result = resolveAction(mage, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.narrative).toContain("unknown spell");
+    expect(result.damage).toBeUndefined();
+    expect(result.spell).toBeUndefined();
+  });
+});
+
+// ══════════════════════════════════════════════════════════
+//  Spell Cooldown
+// ══════════════════════════════════════════════════════════
+
+describe("Spell Cooldown", () => {
+  it("blocks spell cast when on cooldown", () => {
+    const mage = makeMage();
+    const warrior = makeWarrior();
+    // Put fireball on cooldown
+    const fireball = mage.spells.find(s => s.id === "fireball")!;
+    fireball.currentCooldown = 2;
+    const dice = new DiceRoller(42);
+    const action: CombatAction = {
+      type: "cast_spell",
+      actorId: mage.id,
+      spellId: "fireball",
+    };
+    const result = resolveAction(mage, warrior, action, dice, ARENA_PRESETS.medium);
+
+    expect(result.narrative).toContain("cooldown");
+    expect(result.narrative).toContain("2");
+    expect(result.damage).toBeUndefined();
   });
 });

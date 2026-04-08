@@ -113,4 +113,66 @@ describe("createBoss", () => {
       expect(boss.statusEffects).toHaveLength(0);
     }
   });
+
+  it("boss levels scale with tier", () => {
+    for (const id of BOSS_ORDER) {
+      const boss = createBoss(id);
+      const profile = getBossProfile(id)!;
+      expect(boss.level).toBe(5 + profile.tier * 2);
+    }
+  });
+
+  it("all bosses have con and wis saving throw proficiencies", () => {
+    for (const id of BOSS_ORDER) {
+      const boss = createBoss(id);
+      expect(boss.savingThrowProfs).toContain("con");
+      expect(boss.savingThrowProfs).toContain("wis");
+    }
+  });
+
+  it("all bosses have proficiencyBonus of 3", () => {
+    for (const id of BOSS_ORDER) {
+      const boss = createBoss(id);
+      expect(boss.stats.proficiencyBonus).toBe(3);
+    }
+  });
+
+  it("spell bosses have correct spells from ALL_SPELLS", () => {
+    const darkWizard = createBoss("dark_wizard");
+    expect(darkWizard.spells.map(s => s.id)).toContain("fire_bolt");
+    expect(darkWizard.spells.map(s => s.id)).toContain("fireball");
+    expect(darkWizard.spells.map(s => s.id)).toContain("shield");
+    for (const spell of darkWizard.spells) {
+      expect(spell.currentCooldown).toBe(0);
+    }
+  });
+
+  it("bosses with items have valid inventory", () => {
+    const goblin = createBoss("goblin_king");
+    expect(goblin.inventory.length).toBeGreaterThan(0);
+    // Goblin King has health_potions and bombs
+    const hp = goblin.inventory.find(i => i.id === "health_potion");
+    expect(hp).toBeDefined();
+    expect(hp!.quantity).toBeGreaterThan(0);
+    const bomb = goblin.inventory.find(i => i.id === "bomb");
+    expect(bomb).toBeDefined();
+  });
+
+  it("ancient dragon has reach weapon (range 10)", () => {
+    const dragon = createBoss("ancient_dragon");
+    expect(dragon.weapon.range).toBe(10);
+    expect(dragon.weapon.properties).toContain("reach");
+  });
+
+  it("demon lord has highest stats", () => {
+    const demon = createBoss("demon_lord");
+    expect(demon.stats.str).toBe(26);
+    expect(demon.stats.con).toBe(24);
+    expect(demon.stats.ac).toBe(22);
+    expect(demon.stats.hp).toBe(300);
+    expect(demon.weapon.damageDice).toBe("3d6");
+    // Action surge x2
+    const as = demon.features.find(f => f.id === "action_surge");
+    expect(as!.usesPerBattle).toBe(2);
+  });
 });

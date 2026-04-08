@@ -3,15 +3,11 @@
 // ─────────────────────────────────────────────────────────
 import {
   Character, Stats, Spell, SpellId, InventoryItem, ItemId,
-  BossId, SpellSlotGrid, WeaponDef, ClassFeature, ClassFeatureId, AbilityName,
+  BossId, SpellSlotGrid, WeaponDef, ClassFeature, ClassFeatureId,
 } from "./types.js";
-import { ALL_SPELLS } from "./characters.js";
+import { ALL_SPELLS, ALL_ITEMS } from "./characters.js";
 
 const PROF_BONUS = 3;
-
-function mod(score: number): number {
-  return Math.floor((score - 10) / 2);
-}
 
 // ═══════════════════════════════════════════════════════
 //  Boss Profiles — 5 tiers of increasing difficulty
@@ -172,17 +168,11 @@ export function createBoss(
     spellSlots[Number(k)] = { total: v.total, used: 0 };
   }
 
-  const inventory: InventoryItem[] = profile.items.map(entry => ({
-    id: entry.id,
-    name: entry.id.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase()),
-    description: "",
-    quantity: entry.qty,
-    type: entry.id === "health_potion" || entry.id === "greater_health_potion" ? "heal_hp" as const
-      : entry.id === "bomb" ? "damage" as const
-      : "heal_hp" as const,
-    potency: entry.id === "health_potion" ? 7 : entry.id === "greater_health_potion" ? 14 : 0,
-    range: entry.id === "bomb" ? 20 : 0,
-  }));
+  const inventory: InventoryItem[] = profile.items.map(entry => {
+    const base = ALL_ITEMS[entry.id];
+    if (!base) throw new Error("Unknown item for boss: " + entry.id);
+    return { ...base, quantity: entry.qty };
+  });
 
   const features: ClassFeature[] = profile.features.map(f => ({
     id: f.id,

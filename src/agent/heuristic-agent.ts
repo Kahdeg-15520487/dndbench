@@ -22,7 +22,7 @@ export class HeuristicAgent implements IAgent {
   constructor(
     public readonly id: string,
     public readonly name: string,
-    private config?: { personality?: "aggressive" | "defensive" | "balanced" }
+    _config?: { personality?: "aggressive" | "defensive" | "balanced" }
   ) {}
 
   onBattleStart(): void {}
@@ -109,7 +109,7 @@ export class HeuristicAgent implements IAgent {
           type: "cast_spell",
           actorId: this.id,
           targetId: target.id,
-          spellId: spell.id as any,
+          spellId: spell.id,
         }, spell.range);
       }
 
@@ -120,7 +120,7 @@ export class HeuristicAgent implements IAgent {
           type: "cast_spell",
           actorId: this.id,
           targetId: target.id,
-          spellId: spell.id as any,
+          spellId: spell.id,
         }, spell.range);
       }
     } else {
@@ -133,7 +133,7 @@ export class HeuristicAgent implements IAgent {
           type: "cast_spell",
           actorId: this.id,
           targetId: target.id,
-          spellId: spell.id as any,
+          spellId: spell.id,
         }, spell.range);
       }
     }
@@ -152,6 +152,11 @@ export class HeuristicAgent implements IAgent {
       return { type: "defend", actorId: this.id };
     }
 
+    // ── Dash if out of melee range and can't close with a normal move ──
+    if (dist > maxMove + MELEE_RANGE) {
+      return { type: "dash", actorId: this.id, targetId: target.id };
+    }
+
     // ── Default: weapon attack ──
     return withMove(
       { type: "attack", actorId: this.id, targetId: target.id },
@@ -160,7 +165,7 @@ export class HeuristicAgent implements IAgent {
   }
 
   private pickTarget(
-    me: BattleStateSnapshot["characters"][0],
+    _me: BattleStateSnapshot["characters"][0],
     enemies: BattleStateSnapshot["characters"],
   ): BattleStateSnapshot["characters"][0] {
     const sorted = [...enemies].sort((a, b) => (a.hp / a.maxHp) - (b.hp / b.maxHp));

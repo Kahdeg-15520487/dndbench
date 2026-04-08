@@ -122,7 +122,7 @@ export function createWsRenderer(
         send("battle_end", {
           winner: event.winner || "draw",
           reason: event.reason,
-          winningTeam: (event as any).winningTeam || event.winner,
+          winningTeam: event.winningTeam || event.winner,
         });
         break;
     }

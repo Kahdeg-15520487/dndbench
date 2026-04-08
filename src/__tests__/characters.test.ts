@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createCharacter, ALL_SPELLS, CLASS_PRESETS } from "../engine/characters.js";
+import { createCharacter, ALL_SPELLS, ALL_ITEMS, CLASS_PRESETS } from "../engine/characters.js";
 
 describe("createCharacter", () => {
   it("creates a warrior with correct stats", () => {
@@ -176,9 +176,9 @@ describe("CLASS_PRESETS", () => {
   });
 
   it("all classes have valid ability scores (3-20)", () => {
-    for (const [cls, preset] of Object.entries(CLASS_PRESETS)) {
+    for (const [_cls, preset] of Object.entries(CLASS_PRESETS)) {
       const ab = preset.abilities;
-      for (const [key, val] of Object.entries(ab)) {
+      for (const [_key, val] of Object.entries(ab)) {
         expect(val).toBeGreaterThanOrEqual(3);
         expect(val).toBeLessThanOrEqual(20);
       }
@@ -190,5 +190,64 @@ describe("CLASS_PRESETS", () => {
       expect(preset.ac).toBeGreaterThan(0);
       expect(preset.speed).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("ALL_ITEMS", () => {
+  it("has all 5 items", () => {
+    const ids = Object.keys(ALL_ITEMS);
+    expect(ids).toHaveLength(5);
+    expect(ids).toContain("health_potion");
+    expect(ids).toContain("greater_health_potion");
+    expect(ids).toContain("antidote");
+    expect(ids).toContain("bomb");
+    expect(ids).toContain("elixir");
+  });
+
+  it("each item has required fields", () => {
+    for (const [id, item] of Object.entries(ALL_ITEMS)) {
+      expect(item.id).toBe(id as any);
+      expect(item.name).toBeTruthy();
+      expect(item.description).toBeTruthy();
+      expect(["heal_hp", "cure", "damage", "full_restore"]).toContain(item.type);
+      expect(item.range).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("healing items have positive potency", () => {
+    expect(ALL_ITEMS.health_potion.potency).toBeGreaterThan(0);
+    expect(ALL_ITEMS.greater_health_potion.potency).toBeGreaterThan(0);
+    expect(ALL_ITEMS.greater_health_potion.potency).toBeGreaterThan(ALL_ITEMS.health_potion.potency);
+  });
+
+  it("bomb is a damage item with range", () => {
+    expect(ALL_ITEMS.bomb.type).toBe("damage");
+    expect(ALL_ITEMS.bomb.range).toBeGreaterThan(0);
+  });
+});
+
+describe("HP Calculation", () => {
+  it("warrior HP: d10 hit die, CON 16 (+3) → level 5", () => {
+    const w = createCharacter("test", "Test", "warrior");
+    // HP = 10 + 3 (CON) + 4 * (floor(10/2) + 1 + 3) = 13 + 4 * 9 = 13 + 36 = 49
+    expect(w.stats.maxHp).toBe(49);
+  });
+
+  it("mage HP: d6 hit die, CON 13 (+1) → level 5", () => {
+    const m = createCharacter("test", "Test", "mage");
+    // HP = 6 + 1 + 4 * (floor(6/2) + 1 + 1) = 7 + 4 * 5 = 7 + 20 = 27
+    expect(m.stats.maxHp).toBe(27);
+  });
+
+  it("rogue HP: d8 hit die, CON 14 (+2) → level 5", () => {
+    const r = createCharacter("test", "Test", "rogue");
+    // HP = 8 + 2 + 4 * (floor(8/2) + 1 + 2) = 10 + 4 * 7 = 10 + 28 = 38
+    expect(r.stats.maxHp).toBe(38);
+  });
+
+  it("paladin HP: d10 hit die, CON 14 (+2) → level 5", () => {
+    const p = createCharacter("test", "Test", "paladin");
+    // HP = 10 + 2 + 4 * (floor(10/2) + 1 + 2) = 12 + 4 * 8 = 12 + 32 = 44
+    expect(p.stats.maxHp).toBe(44);
   });
 });
