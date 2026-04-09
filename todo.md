@@ -165,6 +165,31 @@
 - [x] **#208** **[high]** Implement Cover System (+2 AC half cover, +5 AC three-quarters cover)
 - [x] **#209** Improve coverage on battle-runner.ts (80.76%), combat.ts (92.16%), replay.ts (84%)
 - [x] **#210** Audit remaining uncovered branches in combat.ts for dead code or missing test paths
+- [x] **#211** **[high]** Refactor tournament dashboard setup screen
+- [x] **#212** **[high]** Enrich combat narratives with dice roll details (save rolls, attack rolls, AC, advantage/disadvantage, damage breakdown)
+- [x] **#213** **[high]** Add structured mechanics data to GameTurnLog and update dashboard replay to show detailed numbers
+- [x] **#214** **[high]** Structured mechanics in GameTurnLog #mechanics
+- [x] **#215** **[high]** Add mechanics fields to GameTurnLog interface (saveRoll, saveDc, attackRoll, targetAc, damageRolls, wasCrit, saveSuccess) #mechanics
+- [x] **#216** **[high]** Populate mechanics fields from CombatResult in turn log builder (tournament.ts ~line 361) #mechanics
+- [x] **#217** **[high]** Add mechanics fields to SSE turn event type and emit in tournament.ts #mechanics
+- [x] **#218** **[high]** Update dashboard replay viewer to render mechanics data with visual formatting (dice, DC, advantage badges) #mechanics
+- [x] **#219** **[high]** Update dashboard live turn log to show mechanics inline #mechanics
+- [x] **#220** **[high]** Replay persistence to disk #persistence
+- [x] **#221** Save turn logs (JSON) to disk alongside markdown reports in saveTournamentReport #persistence
+- [x] **#222** Load turn logs from disk in /api/game/:mi/:gi endpoint so replays work after restart #persistence
+- [x] **#223** Test replay persistence: run tournament, restart server, verify replay still works #persistence
+- [x] **#224** Update elo.test.ts to test badAction field instead of isBadAction string parsing #tests
+- [x] **#225** Add combat.test.ts coverage for badAction reason codes from combat.ts (out_of_range, unknown_spell, on_cooldown, timeout, etc.) #tests
+- [x] **#226** **[low]** Remove or finalize deprecated isBadAction from elo.ts (keep for backward compat or delete) #tests
+- [x] **#227** **[high]** Filter "default" from /api/models and always include heuristic in the list
+- [x] **#228** **[high]** Remove includeHeuristic checkbox from dashboard — heuristic is just a selectable model chip
+- [x] **#229** **[high]** Remove includeHeuristic from TournamentConfig and start endpoint — just use config.models
+- [x] **#230** **[high]** Fix tournament-runner logic: remove getParticipants()/includeHeuristic branching, treat heuristic as normal model
+- [x] **#231** **[high]** Update all tests that reference includeHeuristic or the old start payload
+- [x] **#232** **[high]** Verify TypeScript compiles and all tests pass
+- [x] **#233** **[high]** Add actionType field to GameTurnLog and TournamentEvent turn type
+- [x] **#234** **[high]** Fix turn numbering: use round number instead of action_chosen counter
+- [x] **#235** **[high]** Forward move events and reaction events with proper actionType
 
 ## Archived
 
@@ -2045,8 +2070,294 @@
       "createdAt": 1775688687656,
       "archived": false,
       "completedAt": 1775690655862
+    },
+    {
+      "id": 211,
+      "text": "Refactor tournament dashboard setup screen",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775721080825,
+      "archived": false,
+      "completedAt": 1775721854378
+    },
+    {
+      "id": 212,
+      "text": "Enrich combat narratives with dice roll details (save rolls, attack rolls, AC, advantage/disadvantage, damage breakdown)",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775724002864,
+      "archived": false,
+      "completedAt": 1775725405306
+    },
+    {
+      "id": 213,
+      "text": "Add structured mechanics data to GameTurnLog and update dashboard replay to show detailed numbers",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775724007406,
+      "archived": false,
+      "completedAt": 1775725411577
+    },
+    {
+      "id": 214,
+      "text": "Structured mechanics in GameTurnLog",
+      "done": true,
+      "priority": "high",
+      "tags": [
+        "mechanics"
+      ],
+      "createdAt": 1775737707234,
+      "archived": false,
+      "completedAt": 1775739317368
+    },
+    {
+      "id": 215,
+      "text": "Add mechanics fields to GameTurnLog interface (saveRoll, saveDc, attackRoll, targetAc, damageRolls, wasCrit, saveSuccess)",
+      "done": true,
+      "priority": "high",
+      "tags": [
+        "mechanics"
+      ],
+      "createdAt": 1775737711472,
+      "parentId": 214,
+      "archived": false,
+      "completedAt": 1775737785324
+    },
+    {
+      "id": 216,
+      "text": "Populate mechanics fields from CombatResult in turn log builder (tournament.ts ~line 361)",
+      "done": true,
+      "priority": "high",
+      "tags": [
+        "mechanics"
+      ],
+      "createdAt": 1775737717011,
+      "parentId": 214,
+      "archived": false,
+      "completedAt": 1775737815528
+    },
+    {
+      "id": 217,
+      "text": "Add mechanics fields to SSE turn event type and emit in tournament.ts",
+      "done": true,
+      "priority": "high",
+      "tags": [
+        "mechanics"
+      ],
+      "createdAt": 1775737721234,
+      "parentId": 214,
+      "archived": false,
+      "completedAt": 1775737875148
+    },
+    {
+      "id": 218,
+      "text": "Update dashboard replay viewer to render mechanics data with visual formatting (dice, DC, advantage badges)",
+      "done": true,
+      "priority": "high",
+      "tags": [
+        "mechanics"
+      ],
+      "createdAt": 1775737724462,
+      "parentId": 214,
+      "archived": false,
+      "completedAt": 1775739324538
+    },
+    {
+      "id": 219,
+      "text": "Update dashboard live turn log to show mechanics inline",
+      "done": true,
+      "priority": "high",
+      "tags": [
+        "mechanics"
+      ],
+      "createdAt": 1775737729186,
+      "parentId": 214,
+      "archived": false,
+      "completedAt": 1775738010268
+    },
+    {
+      "id": 220,
+      "text": "Replay persistence to disk",
+      "done": true,
+      "priority": "high",
+      "tags": [
+        "persistence"
+      ],
+      "createdAt": 1775737736289,
+      "archived": false,
+      "completedAt": 1775738890984
+    },
+    {
+      "id": 221,
+      "text": "Save turn logs (JSON) to disk alongside markdown reports in saveTournamentReport",
+      "done": true,
+      "priority": "medium",
+      "tags": [
+        "persistence"
+      ],
+      "createdAt": 1775737739639,
+      "parentId": 220,
+      "archived": false,
+      "completedAt": 1775738158606
+    },
+    {
+      "id": 222,
+      "text": "Load turn logs from disk in /api/game/:mi/:gi endpoint so replays work after restart",
+      "done": true,
+      "priority": "medium",
+      "tags": [
+        "persistence"
+      ],
+      "createdAt": 1775737742238,
+      "parentId": 220,
+      "archived": false,
+      "completedAt": 1775738884183
+    },
+    {
+      "id": 223,
+      "text": "Test replay persistence: run tournament, restart server, verify replay still works",
+      "done": true,
+      "priority": "medium",
+      "tags": [
+        "persistence"
+      ],
+      "createdAt": 1775737745218,
+      "parentId": 220,
+      "archived": false,
+      "completedAt": 1775738898244
+    },
+    {
+      "id": 224,
+      "text": "Update elo.test.ts to test badAction field instead of isBadAction string parsing",
+      "done": true,
+      "priority": "medium",
+      "tags": [
+        "tests"
+      ],
+      "createdAt": 1775737749339,
+      "archived": false,
+      "completedAt": 1775739174585
+    },
+    {
+      "id": 225,
+      "text": "Add combat.test.ts coverage for badAction reason codes from combat.ts (out_of_range, unknown_spell, on_cooldown, timeout, etc.)",
+      "done": true,
+      "priority": "medium",
+      "tags": [
+        "tests"
+      ],
+      "createdAt": 1775737753513,
+      "parentId": 224,
+      "archived": false,
+      "completedAt": 1775739179421
+    },
+    {
+      "id": 226,
+      "text": "Remove or finalize deprecated isBadAction from elo.ts (keep for backward compat or delete)",
+      "done": true,
+      "priority": "low",
+      "tags": [
+        "tests"
+      ],
+      "createdAt": 1775737759276,
+      "parentId": 224,
+      "archived": false,
+      "completedAt": 1775739201442
+    },
+    {
+      "id": 227,
+      "text": "Filter \"default\" from /api/models and always include heuristic in the list",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775740030381,
+      "archived": false,
+      "completedAt": 1775740080710
+    },
+    {
+      "id": 228,
+      "text": "Remove includeHeuristic checkbox from dashboard — heuristic is just a selectable model chip",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775740037420,
+      "archived": false,
+      "completedAt": 1775740438582
+    },
+    {
+      "id": 229,
+      "text": "Remove includeHeuristic from TournamentConfig and start endpoint — just use config.models",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775740045040,
+      "archived": false,
+      "completedAt": 1775740225169
+    },
+    {
+      "id": 230,
+      "text": "Fix tournament-runner logic: remove getParticipants()/includeHeuristic branching, treat heuristic as normal model",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775740053335,
+      "archived": false,
+      "completedAt": 1775740232473
+    },
+    {
+      "id": 231,
+      "text": "Update all tests that reference includeHeuristic or the old start payload",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775740059777,
+      "archived": false,
+      "completedAt": 1775741368517
+    },
+    {
+      "id": 232,
+      "text": "Verify TypeScript compiles and all tests pass",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775740064875,
+      "archived": false,
+      "completedAt": 1775741375280
+    },
+    {
+      "id": 233,
+      "text": "Add actionType field to GameTurnLog and TournamentEvent turn type",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775744619380,
+      "archived": false,
+      "completedAt": 1775751891110
+    },
+    {
+      "id": 234,
+      "text": "Fix turn numbering: use round number instead of action_chosen counter",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775744622893,
+      "archived": false,
+      "completedAt": 1775751899953
+    },
+    {
+      "id": 235,
+      "text": "Forward move events and reaction events with proper actionType",
+      "done": true,
+      "priority": "high",
+      "tags": [],
+      "createdAt": 1775744627373,
+      "archived": false,
+      "completedAt": 1775751909617
     }
   ],
-  "nextId": 211
+  "nextId": 236
 }
 ```

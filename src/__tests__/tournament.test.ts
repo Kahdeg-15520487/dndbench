@@ -12,7 +12,6 @@ describe("Tournament Event System", () => {
 
     const runner = new TournamentRunner({
       models: [],
-      includeHeuristic: true,
       bestOf: 1,
       turnDelayMs: 0,
       maxTurns: 5,
@@ -31,8 +30,7 @@ describe("Tournament Event System", () => {
     const events: TournamentEvent[] = [];
 
     const runner = new TournamentRunner({
-      models: [],
-      includeHeuristic: true,
+      models: [HEURISTIC_BASELINE],
       bestOf: 1,
       outputDir: "tournament",
     });
@@ -52,7 +50,6 @@ describe("Tournament Event System", () => {
   it("tracks ELO correctly with no matchups", async () => {
     const runner = new TournamentRunner({
       models: [HEURISTIC_BASELINE],
-      includeHeuristic: false,
       bestOf: 1,
       outputDir: "tournament",
     });
@@ -69,7 +66,6 @@ describe("Tournament Event System", () => {
   it("getSortedStats returns models sorted by ELO descending", () => {
     const runner = new TournamentRunner({
       models: [HEURISTIC_BASELINE],
-      includeHeuristic: false,
       bestOf: 1,
       outputDir: "tournament",
     });
@@ -79,20 +75,18 @@ describe("Tournament Event System", () => {
     expect(stats[0].model).toBe(HEURISTIC_BASELINE);
   });
 
-  it("creates correct number of participants with heuristic", () => {
+  it("creates correct number of participants", () => {
     const runner = new TournamentRunner({
       models: ["model-a", "model-b"],
-      includeHeuristic: true,
       bestOf: 1,
       outputDir: "tournament",
     });
 
     const stats = runner.getSortedStats();
-    expect(stats).toHaveLength(3);
+    expect(stats).toHaveLength(2);
     const names = stats.map(s => s.model);
     expect(names).toContain("model-a");
     expect(names).toContain("model-b");
-    expect(names).toContain(HEURISTIC_BASELINE);
   });
 
   it("HEURISTIC_BASELINE constant has expected value", () => {
@@ -101,8 +95,7 @@ describe("Tournament Event System", () => {
 
   it("marks heuristic baseline stats as isHeuristic=true", () => {
     const runner = new TournamentRunner({
-      models: ["model-a"],
-      includeHeuristic: true,
+      models: ["model-a", HEURISTIC_BASELINE],
       bestOf: 1,
       outputDir: "tournament",
     });
@@ -138,7 +131,6 @@ describe("Tournament Event System", () => {
 
     const runner = new TournamentRunner({
       models: [],
-      includeHeuristic: true,
       bestOf: 1,
       outputDir: "tournament",
     });
@@ -154,7 +146,6 @@ describe("Tournament Event System", () => {
   it("uses initialElos from config", () => {
     const runner = new TournamentRunner({
       models: ["ModelA", "ModelB"],
-      includeHeuristic: false,
       bestOf: 1,
       outputDir: "tournament",
       initialElos: { ModelA: 1200, ModelB: 800 },
@@ -171,7 +162,6 @@ describe("Tournament Event System", () => {
   it("abort flag prevents further matchups", () => {
     const runner = new TournamentRunner({
       models: ["A", "B", "C"],
-      includeHeuristic: false,
       bestOf: 1,
       turnDelayMs: 0,
       maxTurns: 3,
@@ -185,7 +175,6 @@ describe("Tournament Event System", () => {
   it("tracks class stats for all four classes", async () => {
     const runner = new TournamentRunner({
       models: ["X", "Y"],
-      includeHeuristic: false,
       bestOf: 4, // enough games to rotate through all class pairs
       turnDelayMs: 0,
       maxTurns: 3,
@@ -210,7 +199,6 @@ describe("Tournament Event System", () => {
     let callCount = 0;
     const runner = new TournamentRunner({
       models: ["ErrA", "ErrB"],
-      includeHeuristic: false,
       bestOf: 1,
       turnDelayMs: 0,
       maxTurns: 3,

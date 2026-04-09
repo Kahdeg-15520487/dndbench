@@ -207,6 +207,10 @@ export class LLMAgent implements IAgent {
     let toolCalls: string[] = [];
     // Capture params from toolcall_start (before execution)
     let pendingToolParams: Record<string, any> = {};
+    // Loop detection: track consecutive identical tool calls
+    let lastToolSig: string | null = null;
+    let consecutiveRepeats = 0;
+    const MAX_CONSECUTIVE_REPEATS = 3;
     session.subscribe((event: any) => {
       const t = event.type;
       if (t === "message_update") {
@@ -242,6 +246,27 @@ export class LLMAgent implements IAgent {
         });
       } else if (t === "tool_execution_end") {
         console.error(`[${this.name}] tool_end: ${event.toolName} error=${!!event.isError}`);
+
+        // Loop detection: check for consecutive identical tool calls
+        const toolParams = pendingToolParams[event.toolName];
+        const sig = `${event.toolName}:${JSON.stringify(toolParams ?? {})}`;
+        if (sig === lastToolSig) {
+          consecutiveRepeats++;
+          if (consecutiveRepeats >= MAX_CONSECUTIVE_REPEATS) {
+            console.error(`[${this.name}] 🔁 LOOP DETECTED: ${event.toolName} repeated ${consecutiveRepeats + 1} times — aborting turn`);
+            if (this.turnActive && this.actionResolve) {
+              this.turnActive = false;
+              const fallback = this.actionResolve;
+              this.actionResolve = null;
+              this.session?.abort().catch(() => {});
+              fallback({ type: "wait", actorId: this.id, timedOut: true });
+            }
+            return;
+          }
+        } else {
+          lastToolSig = sig;
+          consecutiveRepeats = 1;
+        }
         // Extract meaningful text from result
         let resultText = event.isError ? "Error" : "";
         if (event.result) {
@@ -267,6 +292,8 @@ export class LLMAgent implements IAgent {
         });
       } else if (t === "turn_end") {
         console.error(`[${this.name}] turn_end (tools: ${toolCalls.join(",")})`);
+        lastToolSig = null;
+        consecutiveRepeats = 0;
         if (thinkingBuf || toolCalls.length) {
           if (thinkingBuf.trim()) {
             this.emitThinking({
@@ -282,12 +309,12 @@ export class LLMAgent implements IAgent {
         // If the agent loop ended without committing an action, resolve with default
         // to prevent hanging until the turn timeout
         if (this.turnActive && this.actionResolve) {
-          console.warn(`[${this.name}] agent_end without commitAction — falling back to attack`);
+          console.warn(`[${this.name}] agent_end without commitAction — dazed, loses turn`);
           this.turnActive = false;
           const fallback = this.actionResolve;
           this.actionResolve = null;
           this.session?.abort().catch(() => {});
-          fallback({ type: "attack", actorId: this.id, targetId: this.enemyId });
+          fallback({ type: "wait", actorId: this.id, timedOut: true });
         }
       }
     });
@@ -326,11 +353,11 @@ export class LLMAgent implements IAgent {
         // abort and fall back to a default action
         const timer = setTimeout(() => {
           if (this.actionResolve) {
-            console.error(`[${this.name}] ⏰ TURN TIMEOUT after ${LLMAgent.TURN_TIMEOUT_MS / 1000}s — falling back to attack`);
+            console.error(`[${this.name}] ⏰ TURN TIMEOUT after ${LLMAgent.TURN_TIMEOUT_MS / 1000}s — dazed, loses turn`);
             this.actionResolve = null;
             this.session?.abort().catch(() => {});
             this.turnActive = false;
-            resolve(defaultAction);
+            resolve({ type: "wait", actorId: this.id, timedOut: true });
           }
         }, LLMAgent.TURN_TIMEOUT_MS);
 
@@ -344,7 +371,7 @@ export class LLMAgent implements IAgent {
           if (this.actionResolve) {
             console.warn(`[${this.name}] Prompt error: ${err.message}`);
             this.turnActive = false;
-            resolve(defaultAction);
+            resolve({ type: "wait", actorId: this.id, timedOut: true });
           }
         });
 
@@ -370,7 +397,7 @@ export class LLMAgent implements IAgent {
     } catch (err: any) {
       this.turnActive = false;
       console.error(`[${this.name}] getAction error: ${err.message}`);
-      return defaultAction;
+      return { type: "wait", actorId: this.id, timedOut: true };
     }
   }
 
@@ -406,6 +433,28 @@ export class LLMAgent implements IAgent {
 
   // ── Tool Definitions ────────────────────────────────
 
+  /** Tool error result type */
+  private toolError(msg: string) {
+    return { content: [{ type: "text" as const, text: msg }], details: {}, isError: true };
+  }
+
+  /** Get self character from current snapshot, or return error */
+  private getSelf() {
+    return this.currentSnapshot?.characters.find((c) => c.id === this.id) ?? null;
+  }
+
+  /** Resolve target or return error result */
+  private resolveTargetOrError(name: string):
+    { error: true; result: ReturnType<LLMAgent["toolError"]> } |
+    { error: false; target: NonNullable<ReturnType<LLMAgent["resolveTarget"]>> } {
+    const target = this.resolveTarget(name);
+    if (!target) {
+      const available = this.currentSnapshot?.characters.map(c => c.name).join(', ') ?? 'none';
+      return { error: true, result: this.toolError(`Unknown combatant: '${name}'. Available: ${available}`) };
+    }
+    return { error: false, target };
+  }
+
   private buildTools() {
     return [
       // ── Observation tools (return data, loop continues) ──
@@ -416,7 +465,8 @@ export class LLMAgent implements IAgent {
         promptSnippet: "Check your own HP, AC, and status effects",
         parameters: Type.Object({}),
         execute: async () => {
-          const me = this.currentSnapshot!.characters.find((c) => c.id === this.id)!;
+          const me = this.getSelf();
+          if (!me) return this.toolError("No battle state available.");
           return {
             content: [{
               type: "text" as const,
@@ -443,10 +493,10 @@ export class LLMAgent implements IAgent {
           name: Type.String({ description: "Character name to inspect (e.g. 'Alpha', 'Beta')" }),
         }),
         execute: async (_id: any, params: any) => {
-          const target = this.resolveTarget(params.name);
-          if (!target) {
-            return { content: [{ type: "text" as const, text: `Unknown combatant: '${params.name}'. Available: ${this.currentSnapshot!.characters.map(c => c.name).join(', ')}` }], details: {} };
-          }
+          if (!params.name) return this.toolError("Missing required parameter: name");
+          const r = this.resolveTargetOrError(params.name);
+          if (r.error) return r.result;
+          const target = r.target;
           return {
             content: [{
               type: "text" as const,
@@ -473,11 +523,12 @@ export class LLMAgent implements IAgent {
           target: Type.String({ description: "Character name to measure distance to (e.g. 'Alpha', 'Beta')" }),
         }),
         execute: async (_id: any, params: any) => {
-          const me = this.currentSnapshot!.characters.find((c) => c.id === this.id)!;
-          const target = this.resolveTarget(params.target);
-          if (!target) {
-            return { content: [{ type: "text" as const, text: `Unknown combatant: '${params.target}'. Available: ${this.currentSnapshot!.characters.map(c => c.name).join(', ')}` }], details: {} };
-          }
+          if (!params.target) return this.toolError("Missing required parameter: target");
+          const me = this.getSelf();
+          if (!me) return this.toolError("No battle state available.");
+          const r = this.resolveTargetOrError(params.target);
+          if (r.error) return r.result;
+          const target = r.target;
           const dx = me.position.x - target.position.x;
           const dy = me.position.y - target.position.y;
           const exactDist = Math.sqrt(dx * dx + dy * dy);
@@ -516,7 +567,8 @@ export class LLMAgent implements IAgent {
         promptSnippet: "Check which spells are ready and their properties",
         parameters: Type.Object({}),
         execute: async () => {
-          const me = this.currentSnapshot!.characters.find((c) => c.id === this.id)!;
+          const me = this.getSelf();
+          if (!me) return this.toolError("No battle state available.");
           return {
             content: [{
               type: "text" as const,
@@ -553,7 +605,8 @@ export class LLMAgent implements IAgent {
         promptSnippet: "Check your available items",
         parameters: Type.Object({}),
         execute: async () => {
-          const me = this.currentSnapshot!.characters.find((c) => c.id === this.id)!;
+          const me = this.getSelf();
+          if (!me) return this.toolError("No battle state available.");
           return {
             content: [{
               type: "text" as const,
@@ -581,12 +634,13 @@ export class LLMAgent implements IAgent {
           move_dy: Type.Optional(Type.Number({ description: "Move this much in Y before attacking (0 = no move)" })),
         }),
         execute: async (_id: any, params: any) => {
-          const t = this.resolveTarget(params.target);
-          if (!t) return { content: [{ type: "text" as const, text: `Unknown combatant: '${params.target}'. Available: ${this.currentSnapshot!.characters.map(c => c.name).join(', ')}` }], details: {} };
+          if (!params.target) return this.toolError("Missing required parameter: target");
+          const r = this.resolveTargetOrError(params.target);
+          if (r.error) return r.result;
           return this.commitAction({
             type: "attack",
             actorId: this.id,
-            targetId: t.id,
+            targetId: r.target.id,
             abilityId: params.smite ? "divine_smite" : undefined,
             move: (params.move_dx || params.move_dy) ? { dx: params.move_dx || 0, dy: params.move_dy || 0 } : undefined,
           });
@@ -619,12 +673,25 @@ export class LLMAgent implements IAgent {
           move_dy: Type.Optional(Type.Number({ description: "Move this much in Y before casting" })),
         }),
         execute: async (_id: any, params: any) => {
-          const t = this.resolveTarget(params.target);
-          if (!t) return { content: [{ type: "text" as const, text: `Unknown combatant: '${params.target}'. Available: ${this.currentSnapshot!.characters.map(c => c.name).join(', ')}` }], details: {} };
+          if (!params.spell_id) return this.toolError("Missing required parameter: spell_id. Use review_spells to see available spells.");
+          if (!params.target) return this.toolError("Missing required parameter: target");
+          // Validate spell exists
+          const me = this.getSelf();
+          if (!me) return this.toolError("No battle state available.");
+          const spell = me.spells.find(s => s.id === params.spell_id || s.name.toLowerCase() === params.spell_id.toLowerCase());
+          if (!spell) {
+            const known = me.spells.map(s => s.id).join(', ');
+            return this.toolError(`Unknown spell: '${params.spell_id}'. Your spells: ${known}`);
+          }
+          if (spell.currentCooldown > 0) {
+            return this.toolError(`Spell '${spell.name}' is on cooldown for ${spell.currentCooldown} more turn(s).`);
+          }
+          const r = this.resolveTargetOrError(params.target);
+          if (r.error) return r.result;
           return this.commitAction({
             type: "cast_spell",
             actorId: this.id,
-            targetId: t.id,
+            targetId: r.target.id,
             spellId: params.spell_id,
             move: (params.move_dx || params.move_dy) ? { dx: params.move_dx || 0, dy: params.move_dy || 0 } : undefined,
           });
@@ -642,12 +709,24 @@ export class LLMAgent implements IAgent {
           move_dy: Type.Optional(Type.Number({ description: "Move this much in Y before using item" })),
         }),
         execute: async (_id: any, params: any) => {
+          if (!params.item_id) return this.toolError("Missing required parameter: item_id. Use review_inventory to see available items.");
+          // Validate item exists
+          const me = this.getSelf();
+          if (!me) return this.toolError("No battle state available.");
+          const item = me.inventory.find(i => i.id === params.item_id);
+          if (!item) {
+            const owned = me.inventory.filter(i => i.quantity > 0).map(i => i.id).join(', ');
+            return this.toolError(`Unknown item: '${params.item_id}'. Your items: ${owned || 'none'}`);
+          }
+          if (item.quantity <= 0) {
+            return this.toolError(`No '${item.name}' remaining (quantity: 0).`);
+          }
           // Resolve target for bombs, default to self for potions
           let targetId = this.id;
           if (params.target) {
-            const t = this.resolveTarget(params.target);
-            if (!t) return { content: [{ type: "text" as const, text: `Unknown combatant: '${params.target}'. Available: ${this.currentSnapshot!.characters.map(c => c.name).join(', ')}` }], details: {} };
-            targetId = t.id;
+            const r = this.resolveTargetOrError(params.target);
+            if (r.error) return r.result;
+            targetId = r.target.id;
           }
           return this.commitAction({
             type: "use_item",
@@ -693,11 +772,13 @@ export class LLMAgent implements IAgent {
           target: Type.String({ description: "The enemy to dash toward." }),
         }),
         execute: async (_id: any, params: any) => {
-          const tgt = this.resolveTarget(params.target);
+          if (!params.target) return this.toolError("Missing required parameter: target");
+          const r = this.resolveTargetOrError(params.target);
+          if (r.error) return r.result;
           return this.commitAction({
             type: "dash",
             actorId: this.id,
-            targetId: tgt?.id || this.enemyId,
+            targetId: r.target.id,
           });
         },
       },
@@ -710,11 +791,13 @@ export class LLMAgent implements IAgent {
           target: Type.String({ description: "The enemy to grapple (must be within 5ft)." }),
         }),
         execute: async (_id: any, params: any) => {
-          const tgt = this.resolveTarget(params.target);
+          if (!params.target) return this.toolError("Missing required parameter: target");
+          const r = this.resolveTargetOrError(params.target);
+          if (r.error) return r.result;
           return this.commitAction({
             type: "grapple",
             actorId: this.id,
-            targetId: tgt?.id || this.enemyId,
+            targetId: r.target.id,
           });
         },
       },
@@ -727,11 +810,13 @@ export class LLMAgent implements IAgent {
           target: Type.String({ description: "The enemy to shove (must be within 5ft)." }),
         }),
         execute: async (_id: any, params: any) => {
-          const tgt = this.resolveTarget(params.target);
+          if (!params.target) return this.toolError("Missing required parameter: target");
+          const r = this.resolveTargetOrError(params.target);
+          if (r.error) return r.result;
           return this.commitAction({
             type: "shove",
             actorId: this.id,
-            targetId: tgt?.id || this.enemyId,
+            targetId: r.target.id,
           });
         },
       },
@@ -746,12 +831,23 @@ export class LLMAgent implements IAgent {
           target: Type.Optional(Type.String({ description: "Target name for healing_word or off_hand_attack" })),
         }),
         execute: async (_id: any, params: any) => {
+          const VALID_BONUS_TYPES = ["healing_word", "cunning_action", "misty_step", "off_hand_attack"];
+          if (!params.bonus_type) return this.toolError(`Missing required parameter: bonus_type. Valid types: ${VALID_BONUS_TYPES.join(', ')}`);
+          if (!VALID_BONUS_TYPES.includes(params.bonus_type)) {
+            return this.toolError(`Invalid bonus_type: '${params.bonus_type}'. Valid types: ${VALID_BONUS_TYPES.join(', ')}`);
+          }
+          if (params.bonus_type === "cunning_action") {
+            const VALID_VARIANTS = ["dash", "disengage", "hide"];
+            if (!params.variant || !VALID_VARIANTS.includes(params.variant)) {
+              return this.toolError(`cunning_action requires 'variant' parameter. Valid: ${VALID_VARIANTS.join(', ')}`);
+            }
+          }
           const bonusAction: Record<string, string> = { type: params.bonus_type };
           if (params.variant) bonusAction.variant = params.variant;
           if (params.target) {
-            const t = this.resolveTarget(params.target);
-            if (t) bonusAction.targetId = t.id;
-            else bonusAction.targetId = this.id; // self
+            const r = this.resolveTargetOrError(params.target);
+            if (r.error) return r.result;
+            bonusAction.targetId = r.target.id;
           }
           this._pendingBonusAction = bonusAction as any;
           return { content: [{ type: "text" as const, text: `Bonus action queued: ${params.bonus_type}. Now use your main action (attack, cast_spell, etc).` }], details: {} };
@@ -889,8 +985,11 @@ ${this.config.systemPrompt || ""}`;
       ? `\nLast action result: ${this.lastResult}`
       : "";
 
+    const decayActive = me.statusEffects.some(e => e.type === "decay");
+    const decayWarning = decayActive ? "\n⚠️ SUDDEN DEATH: You are taking escalating decay damage each turn! Act aggressively!" : "";
+
     return `Turn ${snapshot.turnNumber}.
-Your HP: ${me.hp}/${me.maxHp} (${Math.round((me.hp / me.maxHp) * 100)}%) | AC: ${me.ac} | Status: ${myStatus}${me.hp < me.maxHp * 0.3 ? " ⚠️ CRITICAL!" : ""}
+Your HP: ${me.hp}/${me.maxHp} (${Math.round((me.hp / me.maxHp) * 100)}%) | AC: ${me.ac} | Status: ${myStatus}${me.hp < me.maxHp * 0.3 ? " ⚠️ CRITICAL!" : ""}${decayWarning}
 Position: you(${me.position.x.toFixed(1)},${me.position.y.toFixed(1)})
 ${otherLines.length > 0 ? otherLines.join("\n") : "No other combatants."}
 Observe then act NOW.${lastResult}`;

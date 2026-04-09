@@ -72,7 +72,6 @@ function makeTournamentResult(overrides: Partial<TournamentResult> = {}): Tourna
   return {
     config: {
       models: ["model-a", "model-b"],
-      includeHeuristic: false,
       bestOf: 5,
       baseURL: "http://localhost:8008/v1",
       apiKey: "no-key",

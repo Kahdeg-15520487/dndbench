@@ -203,7 +203,6 @@ describe("Tournament Server", () => {
     expect(html).toContain("manualModels");
     expect(html).toContain("bestOf");
     expect(html).toContain("kFactor");
-    expect(html).toContain("includeHeuristic");
   });
 
   it("dashboard contains live panel with ELO table", async () => {
@@ -276,7 +275,6 @@ describe("Tournament Server Integration (testMode)", () => {
       body: JSON.stringify({
         models: ["test-a", "test-b"],
         bestOf: 1,
-        includeHeuristic: false,
         maxTurns: 15,
       }),
     });
@@ -295,7 +293,6 @@ describe("Tournament Server Integration (testMode)", () => {
       body: JSON.stringify({
         models: ["test-a", "test-b"],
         bestOf: 3,
-        includeHeuristic: false,
         maxTurns: 15,
       }),
     });
@@ -315,7 +312,18 @@ describe("Tournament Server Integration (testMode)", () => {
   }, 30000);
 
   it("reports status after tournament completes", async () => {
-    // Wait for tournament to finish (best-of-1, should be fast)
+    // Reset and run a clean 2-model tournament
+    await fetchJson("/api/tournament/reset", { method: "POST" });
+    const startResp = await fetchJson("/api/tournament/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        models: ["test-a", "test-b"],
+        bestOf: 1,
+        maxTurns: 15,
+      }),
+    });
+    expect(startResp.status).toBe(200);
     await new Promise(r => setTimeout(r, 3000));
 
     const { status, data } = await fetchJson("/api/tournament/status");
@@ -325,7 +333,7 @@ describe("Tournament Server Integration (testMode)", () => {
     expect(data.result).toBeDefined();
     expect(data.result.stats).toHaveLength(2);
     expect(data.result.matchups).toHaveLength(1);
-  });
+  }, 30000);
 
   it("has generated report files", async () => {
     const { status, data } = await fetchJson("/api/reports");
@@ -411,7 +419,7 @@ describe("Tournament Server Integration (testMode)", () => {
     expect(resp.headers.get("content-type")).toContain("text/csv");
     expect(resp.headers.get("content-disposition")).toContain("attachment");
     const csv = await resp.text();
-    expect(csv).toContain("Turn,Actor,Narrative,HpA");
+    expect(csv).toContain("Turn,Actor,Type,Narrative,HpA");
     expect(csv.split("\n").length).toBeGreaterThan(2); // header + at least 1 row
   });
 
@@ -500,7 +508,6 @@ describe("Tournament Server Integration (testMode)", () => {
       body: JSON.stringify({
         models: ["sse-a", "sse-b"],
         bestOf: 1,
-        includeHeuristic: false,
         maxTurns: 10,
       }),
     });
@@ -625,11 +632,11 @@ describe("Tournament Server Integration (testMode)", () => {
     expect(html).toContain('window._lastResult');
   });
 
-  it("dashboard contains quick duel button", async () => {
+  it("dashboard contains duel tab", async () => {
     const resp = await fetch(base + "/");
     const html = await resp.text();
-    expect(html).toContain('function quickDuel');
-    expect(html).toContain('Quick Duel');
+    expect(html).toContain('function startDuel');
+    expect(html).toContain('data-panel="duel"');
   });
 
   it("dashboard contains game duration display", async () => {
@@ -657,7 +664,6 @@ describe("Tournament Server Integration (testMode)", () => {
       body: JSON.stringify({
         models: ["abort-a", "abort-b", "abort-c", "abort-d"],
         bestOf: 3,
-        includeHeuristic: false,
         maxTurns: 30,
       }),
     });
@@ -716,7 +722,6 @@ describe("Tournament Server Integration (testMode)", () => {
       body: JSON.stringify({
         models: ["hp-a", "hp-b"],
         bestOf: 1,
-        includeHeuristic: false,
         maxTurns: 5,
       }),
     });
@@ -789,7 +794,6 @@ describe("Tournament Server Integration (testMode)", () => {
       body: JSON.stringify({
         models: [accModel, accModel + "-opp"],
         bestOf: 1,
-        includeHeuristic: false,
         maxTurns: 3,
       }),
     });
@@ -809,7 +813,6 @@ describe("Tournament Server Integration (testMode)", () => {
       body: JSON.stringify({
         models: [accModel, accModel + "-opp"],
         bestOf: 1,
-        includeHeuristic: false,
         maxTurns: 3,
       }),
     });
@@ -848,7 +851,6 @@ describe("Tournament Server Integration (testMode)", () => {
       body: JSON.stringify({
         models: ["json-model-a", "json-model-b"],
         bestOf: 1,
-        includeHeuristic: false,
         maxTurns: 3,
       }),
     });
@@ -874,7 +876,6 @@ describe("Tournament Server Integration (testMode)", () => {
         body: JSON.stringify({
           models: ["csv-model-a", "csv-model-b"],
           bestOf: 1,
-          includeHeuristic: false,
           maxTurns: 3,
         }),
       });
@@ -934,7 +935,6 @@ describe("Tournament Server Integration (testMode)", () => {
       body: JSON.stringify({
         models: ["Alice", "Bob", "Charlie"],
         bestOf: 5,
-        includeHeuristic: false,
         maxTurns: 30,
       }),
     });
@@ -977,7 +977,6 @@ describe("Tournament Server Integration (testMode)", () => {
       body: JSON.stringify({
         models: ["Alice", "Bob"],
         bestOf: 1,
-        includeHeuristic: false,
         maxTurns: 50,
       }),
     });
@@ -1000,7 +999,6 @@ describe("Tournament Server Integration (testMode)", () => {
       body: JSON.stringify({
         models: ["Alice", "Bob", "Charlie"],
         bestOf: 1,
-        includeHeuristic: false,
         maxTurns: 50,
       }),
     });

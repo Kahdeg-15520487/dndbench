@@ -383,6 +383,7 @@ function resolveAttack(
     return {
       action, actorId: attacker.id, targetId: defender.id,
       narrative: `${attacker.name} is too far away to attack! (${dist.toFixed(0)}ft vs ${attacker.weapon.range}ft range)`,
+      badAction: "out_of_range",
     };
   }
 
@@ -487,18 +488,19 @@ function resolveAttack(
   // Build narrative
   let narrative: string;
   const advNote = advantageMode === "advantage" ? " (advantage)" : advantageMode === "disadvantage" ? " (disadvantage)" : "";
+  const dmgBreakdown = allDamageRolls.length > 0 ? ` [${allDamageRolls.join('+')}]` : '';
   if (!mainAttack.hit) {
     if (mainAttack.mirrorImageMiss) {
       narrative = `${attacker.name} attacks ${defender.name} but hits a mirror image duplicate instead! (${mainAttack.total} vs AC ${mainAttack.targetAc})`;
     } else {
       narrative = mainAttack.roll === 1
         ? `${attacker.name} swings at ${defender.name}${advNote} — critical miss! (nat 1${mainAttack.discarded ? `, discarded ${mainAttack.discarded}` : ''})`
-        : `${attacker.name} attacks ${defender.name}${advNote} — misses! (${mainAttack.total} vs AC ${mainAttack.targetAc})`;
+        : `${attacker.name} attacks ${defender.name}${advNote} — misses! (nat ${mainAttack.roll}+${mainAttack.total - mainAttack.roll}=${mainAttack.total} vs AC ${mainAttack.targetAc})`;
     }
   } else if (mainAttack.critical) {
-    narrative = `${attacker.name} CRITICAL HIT on ${defender.name}${advNote}! ${totalDamage} damage (${mainAttack.total} vs AC ${mainAttack.targetAc})`;
+    narrative = `${attacker.name} CRITICAL HIT on ${defender.name}${advNote}! ${totalDamage} damage (nat 20 vs AC ${mainAttack.targetAc})${dmgBreakdown}`;
   } else {
-    narrative = `${attacker.name} hits ${defender.name}${advNote} for ${totalDamage} damage (${mainAttack.total} vs AC ${mainAttack.targetAc})`;
+    narrative = `${attacker.name} hits ${defender.name}${advNote} for ${totalDamage} damage (nat ${mainAttack.roll}+${mainAttack.total - mainAttack.roll}=${mainAttack.total} vs AC ${mainAttack.targetAc})${dmgBreakdown}`;
   }
 
   if (defender.stats.hp <= 0) {
@@ -560,6 +562,7 @@ function resolveSpell(
     return {
       action, actorId: caster.id, targetId: target.id,
       narrative: `${caster.name} tries to cast an unknown spell!`,
+      badAction: "unknown_spell",
     };
   }
 
@@ -568,6 +571,7 @@ function resolveSpell(
     return {
       action, actorId: caster.id, targetId: target.id,
       narrative: `${spell.name} is on cooldown (${spell.currentCooldown} turns remaining).`,
+      badAction: "on_cooldown",
     };
   }
 
@@ -576,6 +580,7 @@ function resolveSpell(
     return {
       action, actorId: caster.id, targetId: target.id,
       narrative: `${caster.name} has no spell slots left for ${spell.name}!`,
+      badAction: "no_spell_slots",
     };
   }
 
@@ -585,6 +590,7 @@ function resolveSpell(
     return {
       action, actorId: caster.id, targetId: target.id,
       narrative: `${caster.name} is too far away for ${spell.name}! (${dist.toFixed(0)}ft vs ${spell.range}ft range)`,
+      badAction: "out_of_range",
     };
   }
 
@@ -594,6 +600,13 @@ function resolveSpell(
 
   const castingMod = getMod(caster, spell.castingAbility);
   const spellSaveDc = 8 + castingMod + caster.stats.proficiencyBonus;
+
+  // Shared save tracking (used by control and damage spell branches)
+  let saveRoll: number | undefined;
+  let saveSuccess: boolean | undefined;
+  let saveAdvMode: "advantage" | "disadvantage" | "normal" | undefined;
+  let saveTotalValue: number | undefined;
+  let saveModValue: number | undefined;
 
   // Buff spells (self)
   if (spell.type === "buff" && spell.target === "self") {
@@ -660,7 +673,7 @@ function resolveSpell(
         }
         return {
           action, actorId: caster.id, targetId: target.id,
-          narrative: `${caster.name} casts ${spell.name}! ${target.name} auto-fails save — ${statusApplied}!`,
+          narrative: `${caster.name} casts ${spell.name}! ${target.name} auto-fails ${spell.saveAbility.toUpperCase()} save (incapacitated) — ${statusApplied}!`,
           spell: {
             spellName: spell.name,
             slotUsed: spell.level,
@@ -673,20 +686,24 @@ function resolveSpell(
 
       const saveMod = getMod(target, spell.saveAbility)
         + (target.savingThrowProfs.includes(spell.saveAbility) ? target.stats.proficiencyBonus : 0);
-      const saveAdvMode = getSaveAdvantage(target, spell.saveAbility);
+      saveAdvMode = getSaveAdvantage(target, spell.saveAbility);
       const { result: naturalSave } = dice.d20WithAdvantage(saveAdvMode, `${target.name} ${spell.saveAbility.toUpperCase()} save vs ${spell.name}`);
       const { mod: saveBlessBane } = getBlessBaneMod(target, dice);
-      const saveTotal = naturalSave + saveMod + saveBlessBane;
-      const saveSuccess = saveTotal >= spellSaveDc;
+      const st = naturalSave + saveMod + saveBlessBane;
+      saveRoll = naturalSave;
+      saveTotalValue = st;
+      saveModValue = saveMod;
+      const saveSuccess = st >= spellSaveDc;
 
       if (!saveSuccess && spell.statusEffect) {
         applySpellEffect(caster, target, spell, [caster, target]);
         statusApplied = spell.statusEffect.type;
       }
 
+      const advNote = saveAdvMode === "advantage" ? " (advantage)" : saveAdvMode === "disadvantage" ? " (disadvantage)" : "";
       const narrative = saveSuccess
-        ? `${caster.name} casts ${spell.name}! ${target.name} saves (DC ${spellSaveDc}) — resisted!`
-        : `${caster.name} casts ${spell.name}! ${target.name} fails save — ${statusApplied}!`;
+        ? `${caster.name} casts ${spell.name}! ${target.name} saves${advNote} — nat ${naturalSave}+${saveMod}=${st} vs DC ${spellSaveDc} — resisted!`
+        : `${caster.name} casts ${spell.name}! ${target.name} fails save${advNote} — nat ${naturalSave}+${saveMod}=${st} vs DC ${spellSaveDc} — ${statusApplied}!`;
 
       return {
         action, actorId: caster.id, targetId: target.id,
@@ -764,8 +781,6 @@ function resolveSpell(
     let attackRoll: number | undefined;
     let attackTotal: number | undefined;
     let targetAc: number | undefined;
-    let saveRoll: number | undefined;
-    let saveSuccess: boolean | undefined;
 
     let narrativeOverride: string | undefined;
 
@@ -892,6 +907,9 @@ function resolveSpell(
       if (autoFailSave(target, saveAbility)) {
         saveRoll = 0;
         saveSuccess = false;
+        saveTotalValue = 0;
+        saveModValue = 0;
+        saveAdvMode = "normal";
         if (spell.damageDice && spell.damageDice !== "0") {
           const dmg = rollDamageDice(spell.damageDice, dice, `${spell.name} damage`, false);
           totalDamage = dmg.total;
@@ -900,12 +918,14 @@ function resolveSpell(
       } else {
         const saveMod = getMod(target, saveAbility)
           + (target.savingThrowProfs.includes(saveAbility) ? target.stats.proficiencyBonus : 0);
-        const saveAdvMode = getSaveAdvantage(target, saveAbility);
+        saveAdvMode = getSaveAdvantage(target, saveAbility);
         const { result: naturalSave } = dice.d20WithAdvantage(saveAdvMode, `${target.name} ${saveAbility.toUpperCase()} save vs ${spell.name}`);
         const { mod: saveBlessBane } = getBlessBaneMod(target, dice);
-        const saveTotal = naturalSave + saveMod + saveBlessBane;
+        const st = naturalSave + saveMod + saveBlessBane;
         saveRoll = naturalSave;
-        saveSuccess = saveTotal >= spellSaveDc;
+        saveTotalValue = st;
+        saveModValue = saveMod;
+        saveSuccess = st >= spellSaveDc;
 
         if (spell.damageDice && spell.damageDice !== "0") {
           const dmg = rollDamageDice(spell.damageDice, dice, `${spell.name} damage`, false);
@@ -981,13 +1001,16 @@ function resolveSpell(
         narrative = `${caster.name} casts ${spell.name} at ${target.name} but hits a mirror image duplicate instead!`;
       } else {
         narrative = attackRoll !== undefined
-          ? `${caster.name} casts ${spell.name} at ${target.name} — misses! (${attackTotal} vs AC ${targetAc})`
+          ? `${caster.name} casts ${spell.name} at ${target.name} — misses! (nat ${attackRoll}+${(attackTotal ?? 0) - attackRoll}=${attackTotal} vs AC ${targetAc})`
           : `${caster.name} casts ${spell.name} — but it fails!`;
       }
     } else if (spell.saveAbility) {
+      const advNote = saveAdvMode === "advantage" ? " (advantage)" : saveAdvMode === "disadvantage" ? " (disadvantage)" : "";
+      const dmgBreakdown = damageRolls.length > 0 ? ` [${damageRolls.join('+')}]` : '';
+      const halfNote = saveSuccess && spell.halfDamageOnSave ? " (half)" : "";
       narrative = saveSuccess
-        ? `${caster.name} casts ${spell.name}! ${target.name} saves (DC ${spellSaveDc}) — ${totalDamage} damage.`
-        : `${caster.name} casts ${spell.name}! ${target.name} fails save — ${totalDamage} damage!`;
+        ? `${caster.name} casts ${spell.name}! ${target.name} saves${advNote} — nat ${saveRoll}+${saveModValue}=${saveTotalValue} vs DC ${spellSaveDc}${halfNote} — ${totalDamage} damage${dmgBreakdown}.`
+        : `${caster.name} casts ${spell.name}! ${target.name} fails save${advNote} — nat ${saveRoll}+${saveModValue}=${saveTotalValue} vs DC ${spellSaveDc} — ${totalDamage} damage${dmgBreakdown}!`;
     } else {
       narrative = `${caster.name} casts ${spell.name} on ${target.name} for ${totalDamage} ${spell.damageType || ""} damage!`;
     }
@@ -1077,6 +1100,7 @@ function resolveItem(
     return {
       action, actorId: user.id, targetId: target.id,
       narrative: `${user.name} doesn't have that item!`,
+      badAction: "no_item",
     };
   }
 
@@ -1115,6 +1139,7 @@ function resolveItem(
       return {
         action, actorId: user.id, targetId: target.id,
         narrative: `${user.name} tries to throw ${item.name} at ${target.name} but they're too far away! (${dist.toFixed(0)}ft vs ${item.range}ft range)`,
+        badAction: "out_of_range",
       };
     }
     // Alchemist Fire: 3d6 fire damage
@@ -1186,6 +1211,7 @@ function resolveClassAbility(
     return {
       action, actorId: actor.id, targetId: target.id,
       narrative: `${actor.name} doesn't have ability: ${abilityId}`,
+      badAction: "no_ability",
     };
   }
 
@@ -1194,6 +1220,7 @@ function resolveClassAbility(
     return {
       action, actorId: actor.id, targetId: target.id,
       narrative: `${feature.name} has no uses remaining!`,
+      badAction: "no_uses",
     };
   }
 
@@ -1348,6 +1375,7 @@ function resolveGrapple(
       action: { type: "grapple", actorId: actor.id },
       actorId: actor.id,
       narrative: `${actor.name} tries to grapple but has no target!`,
+      badAction: "no_target",
     };
   }
 
@@ -1357,6 +1385,7 @@ function resolveGrapple(
       action: { type: "grapple", actorId: actor.id, targetId: target.id },
       actorId: actor.id,
       narrative: `${actor.name} tries to grapple ${target.name} but they're too far away! (${dist.toFixed(0)}ft)`,
+      badAction: "out_of_range",
     };
   }
 
@@ -1411,6 +1440,7 @@ function resolveShove(
       action: { type: "shove", actorId: actor.id },
       actorId: actor.id,
       narrative: `${actor.name} tries to shove but has no target!`,
+      badAction: "no_target",
     };
   }
 
@@ -1420,6 +1450,7 @@ function resolveShove(
       action: { type: "shove", actorId: actor.id, targetId: target.id },
       actorId: actor.id,
       narrative: `${actor.name} tries to shove ${target.name} but they're too far away! (${dist.toFixed(0)}ft)`,
+      badAction: "out_of_range",
     };
   }
 
@@ -1622,6 +1653,12 @@ export function processStatusEffects(character: Character): string[] {
       narratives.push(`${character.name} takes ${effect.potency} poison damage!`);
     }
 
+    if (effect.type === "decay") {
+      character.stats.hp = Math.max(0, character.stats.hp - effect.potency);
+      narratives.push(`${character.name} takes ${effect.potency} decay damage!`);
+      effect.potency += 2; // Escalate each turn
+    }
+
     if (effect.type === "regen") {
       const healed = Math.min(effect.potency, character.stats.maxHp - character.stats.hp);
       character.stats.hp += healed;
@@ -1663,6 +1700,16 @@ export function resolveAction(
   arena?: ArenaConfig,
   allCharacters: Character[] = [],
 ): CombatResult {
+  // Timeout: agent couldn't decide in time — wasted turn
+  if (action.timedOut) {
+    return {
+      action,
+      actorId: actor.id,
+      narrative: `${actor.name} is dazed and loses focus, unable to act!`,
+      badAction: "timeout",
+    };
+  }
+
   // Resolve move first (if any)
   let moveResult: MoveResult | undefined;
   if (action.move && arena) {
@@ -1810,7 +1857,7 @@ export function resolveBonusAction(
       const dist = distance(actor.position, offTarget.position);
       const weaponRange = actor.weapon.range;
       if (dist > weaponRange) {
-        return { action: { type: "wait", actorId: actor.id }, actorId: actor.id, narrative: `Off-hand attack: ${offTarget.name} is too far away! (${dist.toFixed(0)}ft)` };
+        return { action: { type: "wait", actorId: actor.id }, actorId: actor.id, narrative: `Off-hand attack: ${offTarget.name} is too far away! (${dist.toFixed(0)}ft)`, badAction: "out_of_range" };
       }
       const roll = dice.d20(`${actor.name} off-hand attack`);
       const total = roll + actor.stats.proficiencyBonus + abilityModifier(actor.stats[actor.weapon.abilityMod as AbilityName]);

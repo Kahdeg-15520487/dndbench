@@ -129,6 +129,7 @@ export function updateStatsAfterMatch(
  * Analyze a combat result to detect "bad" actions.
  * Returns true if the action was obviously suboptimal.
  */
+/** @deprecated Use result.badAction field from CombatResult instead */
 export function isBadAction(narrative: string): boolean {
   const lower = narrative.toLowerCase();
   if (lower.includes("too far away")) return true;

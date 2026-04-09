@@ -46,6 +46,11 @@ export function saveTournamentReport(
   fs.writeFileSync(summaryPath, md, "utf-8");
   paths.push(summaryPath);
 
+  // 3. Save full tournament data as JSON (for replay persistence)
+  const jsonPath = path.join(dir, "tournament_data.json");
+  fs.writeFileSync(jsonPath, JSON.stringify(result, null, 2), "utf-8");
+  paths.push(jsonPath);
+
   return { runDir: runName, paths };
 }
 

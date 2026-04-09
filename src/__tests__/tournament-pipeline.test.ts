@@ -33,7 +33,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
 
     const runner = new TournamentRunner({
       models: ["fake-model-a", "fake-model-b"],
-      includeHeuristic: false,
       bestOf: 3,
       turnDelayMs: 0,
       maxTurns: 20,
@@ -62,7 +61,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
   it("runs a 3-model round-robin (3 matchups)", async () => {
     const runner = new TournamentRunner({
       models: ["a", "b", "c"],
-      includeHeuristic: false,
       bestOf: 1,
       turnDelayMs: 0,
       maxTurns: 15,
@@ -85,7 +83,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
   it("tracks ELO changes after games", async () => {
     const runner = new TournamentRunner({
       models: ["model-a", "model-b"],
-      includeHeuristic: false,
       bestOf: 5,
       turnDelayMs: 0,
       maxTurns: 20,
@@ -106,7 +103,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
 
     const runner = new TournamentRunner({
       models: ["a", "b"],
-      includeHeuristic: false,
       bestOf: 2,
       turnDelayMs: 0,
       maxTurns: 15,
@@ -138,7 +134,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
   it("emits turn events with narratives during games", async () => {
     const runner = new TournamentRunner({
       models: ["x", "y"],
-      includeHeuristic: false,
       bestOf: 1,
       maxTurns: 10,
       turnDelayMs: 0,
@@ -168,7 +163,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
   it("includes turnLog in game results", async () => {
     const runner = new TournamentRunner({
       models: ["x", "y"],
-      includeHeuristic: false,
       bestOf: 1,
       maxTurns: 10,
       turnDelayMs: 0,
@@ -196,7 +190,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
   it("produces valid report files", async () => {
     const runner = new TournamentRunner({
       models: ["a", "b"],
-      includeHeuristic: false,
       bestOf: 1,
       turnDelayMs: 0,
       maxTurns: 15,
@@ -207,8 +200,8 @@ describe("Tournament Pipeline (heuristic-only)", () => {
     const result = await runner.run();
     const { paths } = saveTournamentReport(result, TEST_DIR);
 
-    // Should produce matchup report + summary
-    expect(paths.length).toBe(2);
+    // Should produce matchup report + summary + JSON data
+    expect(paths.length).toBe(3);
     for (const p of paths) {
       expect(fs.existsSync(p)).toBe(true);
       const content = fs.readFileSync(p, "utf-8");
@@ -223,8 +216,7 @@ describe("Tournament Pipeline (heuristic-only)", () => {
 
   it("handles model with heuristic baseline included", async () => {
     const runner = new TournamentRunner({
-      models: ["llm-model"],
-      includeHeuristic: true,
+      models: ["llm-model", "heuristic-baseline"],
       bestOf: 1,
       turnDelayMs: 0,
       maxTurns: 15,
@@ -250,7 +242,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
   it("game results have valid winner field", async () => {
     const runner = new TournamentRunner({
       models: ["a", "b"],
-      includeHeuristic: false,
       bestOf: 3,
       turnDelayMs: 0,
       maxTurns: 15,
@@ -273,7 +264,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
   it("class rotation works correctly", async () => {
     const runner = new TournamentRunner({
       models: ["a", "b"],
-      includeHeuristic: false,
       bestOf: 5,
       turnDelayMs: 0,
       maxTurns: 15,
@@ -297,7 +287,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
     const dir = TEST_DIR + "/init-elo-test";
     const runner = new TournamentRunner({
       models: ["Alpha", "Beta"],
-      includeHeuristic: false,
       bestOf: 1,
       turnDelayMs: 0,
       maxTurns: 5,
@@ -344,7 +333,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
 
     const runner = new TournamentRunner({
       models: ["Alpha", "Beta"],
-      includeHeuristic: false,
       bestOf: 1,
       turnDelayMs: 0,
       maxTurns: 5,
@@ -367,7 +355,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
     const outputDir = TEST_DIR + "/pipeline-full";
     const runner = new TournamentRunner({
       models: ["Alpha", "Beta"],
-      includeHeuristic: false,
       bestOf: 3,
       turnDelayMs: 0,
       maxTurns: 10,
@@ -403,6 +390,9 @@ describe("Tournament Pipeline (heuristic-only)", () => {
       const content = fs.readFileSync(rf, "utf-8");
       expect(content.length).toBeGreaterThan(100);
 
+      // Skip JSON data file for HTML conversion
+      if (rf.endsWith(".json")) continue;
+
       // 3. Convert to HTML
       const html = markdownToHtml(content);
       expect(html).toContain("<"); // should be HTML, not raw markdown
@@ -410,7 +400,7 @@ describe("Tournament Pipeline (heuristic-only)", () => {
     }
 
     // 4. Verify report content has key sections
-    const summaryReport = fs.readFileSync(reportFiles[reportFiles.length - 1], "utf-8");
+    const summaryReport = fs.readFileSync(reportFiles.find(p => p.includes("tournament_summary"))!, "utf-8");
     expect(summaryReport).toContain("ELO Rankings");
     expect(summaryReport).toContain("Matchup");
 
@@ -439,7 +429,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
 
     const runner = new TournamentRunner({
       models: ["Alpha", "Beta"],
-      includeHeuristic: false,
       bestOf: 3,
       turnDelayMs: 0,
       maxTurns: 3,
@@ -462,7 +451,6 @@ describe("Tournament Pipeline (heuristic-only)", () => {
 
     const runner = new TournamentRunner({
       models: ["A", "B", "C", "D"],
-      includeHeuristic: false,
       bestOf: 1,
       turnDelayMs: 0,
       maxTurns: 3,

@@ -100,6 +100,7 @@ export class BattleRunner {
   private winningTeam?: string;    // winning team tag
   private defeatedIds = new Set<string>(); // track which characters have had defeat emitted
   private _hasRun = false;
+  private _decayApplied = false;
 
   constructor(
     characters: Character[],
@@ -149,7 +150,30 @@ export class BattleRunner {
 
     this.emit({ type: "battle_start", characters: this.characters, arena: this.arena });
 
-    while (!this.finished && this.turnNumber < this.config.maxTurns) {
+    while (!this.finished) {
+      // Apply sudden-death decay when max turns is reached
+      if (this.turnNumber >= this.config.maxTurns && !this._decayApplied) {
+        this._decayApplied = true;
+        const decayDmg = 5;
+        for (const c of this.characters) {
+          if (c.stats.hp > 0) {
+            c.statusEffects.push({
+              type: "decay",
+              turnsRemaining: 99,
+              potency: decayDmg,
+              sourceId: "sudden_death",
+            });
+            this.emit({
+              type: "action_result", actorId: c.id, targetId: c.id,
+              result: {
+                action: { type: "wait", actorId: c.id }, actorId: c.id,
+                narrative: `💀 ${c.name} is afflicted by sudden death decay! Taking ${decayDmg} damage per turn, escalating!`,
+              },
+            });
+          }
+        }
+      }
+
       await this.executeTurn();
       if (this.config.turnDelayMs > 0 && !this.finished) {
         await this.delay(this.config.turnDelayMs);

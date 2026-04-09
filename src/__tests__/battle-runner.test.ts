@@ -115,20 +115,29 @@ describe("BattleRunner", () => {
     expect(log.winner).toBeDefined();
   });
 
-  it("respects maxTurns limit", async () => {
+  it("applies sudden-death decay after maxTurns", async () => {
     const warrior = createCharacter("w1", "Alpha", "warrior", { x: 10, y: 30 }, "red");
     const mage = createCharacter("m1", "Beta", "mage", { x: 90, y: 30 }, "blue");
     const agentW = new HeuristicAgent("w1", "Alpha");
     const agentM = new HeuristicAgent("m1", "Beta");
 
+    const events: BattleEvent[] = [];
     const runner = new BattleRunner(
       [warrior, mage],
       [agentW, agentM],
-      { turnDelayMs: 0, arena: ARENA_PRESETS.medium, maxTurns: 3 },
+      { turnDelayMs: 0, arena: ARENA_PRESETS.medium, maxTurns: 3, eventHandler: (e) => events.push(e) },
     );
 
     const log = await runner.run();
-    expect(log.totalTurns).toBeLessThanOrEqual(3);
+    // Battle should eventually end (decay kills someone)
+    expect(log.totalTurns).toBeGreaterThan(3);
+    // Decay damage narrative should appear
+    const decayNarratives = events.filter(e =>
+      e.type === "action_result" && e.result?.narrative?.includes("decay"));
+    expect(decayNarratives.length).toBeGreaterThan(0);
+    // Battle should have ended — winner or draw (both can die to decay simultaneously)
+    const battleEnd = events.find(e => e.type === "battle_end") as any;
+    expect(battleEnd).toBeDefined();
   });
 
   it("places characters in default positions when (0,0)", async () => {
@@ -326,7 +335,7 @@ describe("BattleRunner", () => {
     expect(log.winner).toBeDefined();
   });
 
-  it("draw when maxTurns reached with both alive", async () => {
+  it("decay forces outcome after maxTurns with both alive", async () => {
     const warrior = createCharacter("w1", "Alpha", "warrior", { x: 10, y: 30 }, "red");
     const mage = createCharacter("m1", "Beta", "mage", { x: 90, y: 30 }, "blue");
     const agentW = new HeuristicAgent("w1", "Alpha");
@@ -344,12 +353,11 @@ describe("BattleRunner", () => {
       },
     );
 
-    await runner.run();
-    // After 1 turn with no kills, should be a draw
+    const log = await runner.run();
+    // Decay should kick in after turn 1 and force a winner
     const battleEnd = events.find(e => e.type === "battle_end") as any;
     expect(battleEnd).toBeDefined();
-    // Winner could be undefined (draw) or one of the combatants if someone died
-    expect(["red", "blue", undefined]).toContain(battleEnd?.winningTeam);
+    expect(log.winner).toBeDefined();
   });
 
   it("supports turnDelayMs for real-time pacing", async () => {

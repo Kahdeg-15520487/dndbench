@@ -153,6 +153,18 @@ export function createTournamentApp(options: {
   const historyFile = path.join(reportDir, "history.json");
   const ratingsFile = path.join(reportDir, "ratings.json");
 
+  /** Load tournament result from a run directory's tournament_data.json */
+  function loadResultFromDisk(runDir: string): TournamentResult | null {
+    const jsonPath = path.join(reportDir, runDir, "tournament_data.json");
+    try {
+      if (fs.existsSync(jsonPath)) {
+        const raw = fs.readFileSync(jsonPath, "utf-8");
+        return JSON.parse(raw) as TournamentResult;
+      }
+    } catch { /* ignore */ }
+    return null;
+  }
+
   // ── API: List available models from LLM endpoint ──
   app.get("/api/models", async (_req, res) => {
     if (options.testMode) {
@@ -165,7 +177,9 @@ export function createTournamentApp(options: {
       const data = await resp.json() as any;
       const models: string[] = (data.data ?? data.models ?? [])
         .map((m: any) => m.id)
-        .filter((id: string) => typeof id === "string");
+        .filter((id: string) => typeof id === "string" && id !== "default");
+      // Always include heuristic baseline as a selectable model
+      if (!models.includes(HEURISTIC_BASELINE)) models.push(HEURISTIC_BASELINE);
       res.json({ models });
     } catch (err: any) {
       res.json({ models: [], error: err.message });
@@ -221,7 +235,6 @@ export function createTournamentApp(options: {
     currentRunner = new TournamentRunner({
       models: req.body.models,
       bestOf,
-      includeHeuristic: req.body.includeHeuristic ?? true,
       baseURL: options.baseURL,
       apiKey: options.apiKey,
       turnDelayMs: 0,
@@ -344,20 +357,33 @@ export function createTournamentApp(options: {
 
   // ── API: Current status ──
   app.get("/api/tournament/status", (_req, res) => {
+    // Try in-memory, then fall back to latest run on disk
+    let result = currentResult;
+    let fromDisk = false;
+    if (!result) {
+      const history = loadHistory(historyFile);
+      if (history.length > 0) {
+        const latest = history[history.length - 1];
+        result = loadResultFromDisk(latest.id);
+        fromDisk = result !== null;
+      }
+    }
     res.json({
       isRunning,
-      hasResult: currentResult !== null,
-      result: currentResult ? {
-        startTime: currentResult.startTime,
-        endTime: currentResult.endTime,
-        stats: currentResult.stats,
-        matchups: currentResult.matchups.map(m => ({
+      hasResult: result !== null,
+      fromDisk,
+      result: result ? {
+        startTime: result.startTime,
+        endTime: result.endTime,
+        stats: result.stats,
+        matchups: result.matchups.map(m => ({
           modelA: m.modelA, modelB: m.modelB,
           winsA: m.winsA, winsB: m.winsB, draws: m.draws,
           games: m.games.map(g => ({
             gameNumber: g.gameNumber, classA: g.classA, classB: g.classB,
             winner: g.winner, turns: g.turns, durationMs: g.durationMs,
-            error: g.error,
+            error: g.error, endReason: g.endReason,
+            statsA: g.statsA, statsB: g.statsB,
           })),
         })),
       } : null,
@@ -404,24 +430,44 @@ export function createTournamentApp(options: {
 
   // ── API: Export current tournament as JSON ──
   app.get("/api/export/json", (_req, res) => {
-    if (!currentResult) {
+    let result = currentResult;
+    let startTime = result?.startTime;
+    if (!result) {
+      const history = loadHistory(historyFile);
+      if (history.length > 0) {
+        const latest = history[history.length - 1];
+        result = loadResultFromDisk(latest.id);
+        startTime = latest.date;
+      }
+    }
+    if (!result) {
       res.status(404).json({ error: "No tournament result available" });
       return;
     }
-    res.setHeader("Content-Disposition", `attachment; filename="tournament_${currentResult.startTime.replace(/[:.]/g, "-")}.json"`);
-    res.json(currentResult);
+    res.setHeader("Content-Disposition", `attachment; filename="tournament_${(startTime ?? "unknown").replace(/[:.]/g, "-")}.json"`);
+    res.json(result);
   });
 
   // ── API: Export current tournament as CSV ──
   app.get("/api/export/csv", (_req, res) => {
-    if (!currentResult) {
+    let result = currentResult;
+    let startTime = result?.startTime;
+    if (!result) {
+      const history = loadHistory(historyFile);
+      if (history.length > 0) {
+        const latest = history[history.length - 1];
+        result = loadResultFromDisk(latest.id);
+        startTime = latest.date;
+      }
+    }
+    if (!result) {
       res.status(404).json({ error: "No tournament result available" });
       return;
     }
     const lines: string[] = [];
     // ELO rankings
     lines.push("Rank,Model,ELO,Wins,Losses,Draws,Matches,Win%,BadActions");
-    const sorted = [...currentResult.stats].sort((a, b) => b.elo - a.elo);
+    const sorted = [...result.stats].sort((a, b) => b.elo - a.elo);
     sorted.forEach((s, i) => {
       const winPct = s.matchesPlayed > 0 ? ((s.wins / s.matchesPlayed) * 100).toFixed(1) : "0";
       lines.push(`${i + 1},"${s.model}",${s.elo},${s.wins},${s.losses},${s.draws},${s.matchesPlayed},${winPct},${s.totalBadActions}`);
@@ -429,20 +475,20 @@ export function createTournamentApp(options: {
     lines.push("");
     // Matchup results
     lines.push("ModelA,ModelB,WinsA,WinsB,Draws");
-    currentResult.matchups.forEach(m => {
+    result.matchups.forEach(m => {
       lines.push(`"${m.modelA}","${m.modelB}",${m.winsA},${m.winsB},${m.draws}`);
     });
     lines.push("");
     // Per-game results
     lines.push("Matchup,Game,ClassA,ClassB,Winner,Turns,BadA,BadB");
-    currentResult.matchups.forEach(m => {
+    result.matchups.forEach(m => {
       m.games.forEach(g => {
         const winner = g.winner === "A" ? m.modelA : g.winner === "B" ? m.modelB : "draw";
         lines.push(`"${m.modelA} vs ${m.modelB}",${g.gameNumber},${g.classA},${g.classB},"${winner}",${g.turns},${g.statsA.badActions},${g.statsB.badActions}`);
       });
     });
     res.setHeader("Content-Type", "text/csv");
-    res.setHeader("Content-Disposition", `attachment; filename="tournament_${currentResult.startTime.replace(/[:.]/g, "-")}.csv"`);
+    res.setHeader("Content-Disposition", `attachment; filename="tournament_${(startTime ?? "unknown").replace(/[:.]/g, "-")}.csv"`);
     res.send(lines.join("\n"));
   });
 
@@ -477,20 +523,31 @@ export function createTournamentApp(options: {
     }
   });
 
+  // ── Helper: find a game from result by indices ──
+  function findGame(result: TournamentResult, mi: number, gi: number) {
+    const matchup = result.matchups[mi];
+    if (!matchup) return null;
+    return matchup.games[gi] ?? null;
+  }
+
   // ── API: Get game turn log ──
   app.get("/api/game/:matchupIdx/:gameIdx", (req, res) => {
-    if (!currentResult) {
-      res.status(404).json({ error: "No tournament result yet" });
-      return;
-    }
     const mi = parseInt(req.params.matchupIdx, 10);
     const gi = parseInt(req.params.gameIdx, 10);
-    const matchup = currentResult.matchups[mi];
-    if (!matchup) {
-      res.status(404).json({ error: "Matchup not found" });
-      return;
+
+    // Try in-memory first
+    let game = currentResult ? findGame(currentResult, mi, gi) : null;
+
+    // Fallback: load latest run from disk
+    if (!game) {
+      const history = loadHistory(historyFile);
+      if (history.length > 0) {
+        const latest = history[history.length - 1];
+        const diskResult = loadResultFromDisk(latest.id);
+        if (diskResult) game = findGame(diskResult, mi, gi);
+      }
     }
-    const game = matchup.games[gi];
+
     if (!game) {
       res.status(404).json({ error: "Game not found" });
       return;
@@ -504,26 +561,62 @@ export function createTournamentApp(options: {
       turns: game.turns,
       durationMs: game.durationMs,
       turnLog: game.turnLog ?? [],
+      endReason: game.endReason,
+    });
+  });
+
+  // ── API: Get game from a specific run ──
+  app.get("/api/reports/:runDir/game/:matchupIdx/:gameIdx", (req, res) => {
+    const diskResult = loadResultFromDisk(req.params.runDir);
+    if (!diskResult) {
+      res.status(404).json({ error: "Run not found" });
+      return;
+    }
+    const mi = parseInt(req.params.matchupIdx, 10);
+    const gi = parseInt(req.params.gameIdx, 10);
+    const game = findGame(diskResult, mi, gi);
+    if (!game) {
+      res.status(404).json({ error: "Game not found" });
+      return;
+    }
+    res.json({
+      modelA: game.modelA,
+      modelB: game.modelB,
+      classA: game.classA,
+      classB: game.classB,
+      winner: game.winner,
+      turns: game.turns,
+      durationMs: game.durationMs,
+      turnLog: game.turnLog ?? [],
+      endReason: game.endReason,
     });
   });
 
   // ── API: Export game turn log as CSV ──
   app.get("/api/game/:matchupIdx/:gameIdx/export", (req, res) => {
-    if (!currentResult) {
-      res.status(404).json({ error: "No tournament result yet" });
-      return;
-    }
     const mi = parseInt(req.params.matchupIdx, 10);
     const gi = parseInt(req.params.gameIdx, 10);
-    const matchup = currentResult.matchups[mi];
-    if (!matchup) { res.status(404).json({ error: "Matchup not found" }); return; }
-    const game = matchup.games[gi];
-    if (!game) { res.status(404).json({ error: "Game not found" }); return; }
-    const lines: string[] = ["Turn,Actor,Narrative,HpA,MaxHpA,HpB,MaxHpB"];
-    for (const t of (game.turnLog ?? [])) {
-      lines.push(`${t.turnNumber},"${t.actorName}","${(t.narrative || "").replace(/"/g, '""')}",${t.hpA},${t.maxHpA},${t.hpB},${t.maxHpB}`);
+    let game = currentResult ? findGame(currentResult, mi, gi) : null;
+    let matchupModel: string | undefined;
+    if (!game) {
+      const history = loadHistory(historyFile);
+      if (history.length > 0) {
+        const latest = history[history.length - 1];
+        const diskResult = loadResultFromDisk(latest.id);
+        if (diskResult) {
+          game = findGame(diskResult, mi, gi);
+          matchupModel = diskResult.matchups[mi]?.modelA;
+        }
+      }
+    } else {
+      matchupModel = currentResult!.matchups[mi]?.modelA;
     }
-    const filename = `game_${matchup.modelA}_vs_${matchup.modelB}_${game.gameNumber}.csv`;
+    if (!game) { res.status(404).json({ error: "Game not found" }); return; }
+    const lines: string[] = ["Turn,Actor,Type,Narrative,HpA,MaxHpA,HpB,MaxHpB"];
+    for (const t of (game.turnLog ?? [])) {
+      lines.push(`${t.turnNumber},"${t.actorName}",${t.actionType ?? "action"},"${(t.narrative || "").replace(/"/g, '\"\"')}",${t.hpA},${t.maxHpA},${t.hpB},${t.maxHpB}`);
+    }
+    const filename = `game_${matchupModel ?? "unknown"}_game_${game.gameNumber}.csv`;
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     res.send(lines.join("\n"));

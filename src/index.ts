@@ -55,7 +55,7 @@ interface CliOptions {
   tournament: boolean;
   tournamentModels: string[];   // --tournament-models "ModelA" "ModelB" ...
   tournamentBestOf: number;
-  tournamentNoHeuristic: boolean;
+  tournamentHeuristic: boolean;
   tournamentKFactor: number;
   tournamentOutputDir: string;
 
@@ -87,7 +87,7 @@ function parseArgs(args: string[]): CliOptions {
     tournament: false,
     tournamentModels: [],
     tournamentBestOf: 5,
-    tournamentNoHeuristic: false,
+    tournamentHeuristic: false,
     tournamentKFactor: 32,
     tournamentOutputDir: "tournament",
     serveReports: false,
@@ -124,7 +124,7 @@ function parseArgs(args: string[]): CliOptions {
         }
         break;
       case "--tournament-best-of": opts.tournamentBestOf = parseInt(args[++i]); break;
-      case "--tournament-no-heuristic": opts.tournamentNoHeuristic = true; break;
+      case "--tournament-heuristic": opts.tournamentHeuristic = true; break;
       case "--tournament-k-factor": opts.tournamentKFactor = parseInt(args[++i]); break;
       case "--tournament-output": opts.tournamentOutputDir = args[++i]; break;
       case "--serve-reports": opts.serveReports = true; break;
@@ -185,7 +185,7 @@ Usage: npx tsx src/index.ts [options]
   -tm, --tournament-models <model> [<model> ...]
                           LLM models to compete (space-separated)
   --tournament-best-of <n> Games per matchup (default: 5)
-  --tournament-no-heuristic  Exclude heuristic baseline
+  --tournament-heuristic       Include heuristic baseline in the tournament
   --tournament-k-factor <n> ELO K-factor (default: 32)
   --tournament-output <dir> Output directory (default: tournament/)
 
@@ -229,7 +229,7 @@ Examples:
   npx tsx src/index.ts --tournament -tm gemma-4-26b qwen3 cydonia-24b
 
   # Tournament: no heuristic baseline, custom K-factor
-  npx tsx src/index.ts --tournament -tm modelA modelB --tournament-no-heuristic --tournament-k-factor 24
+  npx tsx src/index.ts --tournament -tm modelA modelB --tournament-heuristic --tournament-k-factor 24
 `));
 }
 
@@ -361,9 +361,10 @@ async function runTournament(opts: CliOptions) {
   }
 
   const runner = new TournamentRunner({
-    models: opts.tournamentModels,
+    models: opts.tournamentHeuristic
+      ? [...opts.tournamentModels, "heuristic-baseline"]
+      : opts.tournamentModels,
     bestOf: opts.tournamentBestOf,
-    includeHeuristic: !opts.tournamentNoHeuristic,
     baseURL: process.env.LLM_BASE_URL || "http://localhost:8008/v1",
     apiKey: process.env.LLM_API_KEY || "no-key",
     turnDelayMs: 0,

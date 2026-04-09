@@ -17,7 +17,6 @@ import {
   ModelStats,
   createModelStats,
   updateStatsAfterMatch,
-  isBadAction,
 } from "./elo.js";
 
 // ── Sentinel ────────────────────────────────────────────
@@ -29,7 +28,6 @@ export const HEURISTIC_BASELINE = "heuristic-baseline";
 
 export interface TournamentConfig {
   models: string[];
-  includeHeuristic: boolean;
   bestOf: number;
   baseURL: string;
   apiKey: string;
@@ -50,7 +48,6 @@ const DEFAULT_CONFIG: Partial<TournamentConfig> = {
   maxTurns: 30,
   kFactor: 32,
   apiKey: "no-key",
-  includeHeuristic: true,
   outputDir: "tournament",
   classes: [
     ["warrior", "mage"],
@@ -67,7 +64,7 @@ export type TournamentEvent =
   | { type: "tournament_start"; totalMatchups: number; totalGames: number; participants: string[] }
   | { type: "matchup_start"; matchupNum: number; totalMatchups: number; modelA: string; modelB: string }
   | { type: "game_start"; gameNum: number; totalGames: number; modelA: string; modelB: string; classA: string; classB: string }
-  | { type: "turn"; gameNum: number; narrative: string; turnNumber: number; hpA: number; hpB: number; maxHpA: number; maxHpB: number }
+  | { type: "turn"; gameNum: number; narrative: string; turnNumber: number; actionType: TurnActionType; hpA: number; hpB: number; maxHpA: number; maxHpB: number; badAction?: string; attackRoll?: number; attackTotal?: number; targetAc?: number; saveRoll?: number; saveDc?: number; saveSuccess?: boolean; damageRolls?: number[]; wasCrit?: boolean; damageTotal?: number }
   | { type: "game_end"; gameNum: number; game: GameResult; eloA: number; eloB: number }
   | { type: "matchup_end"; matchupNum: number; modelA: string; modelB: string; winsA: number; winsB: number; draws: number }
   | { type: "tournament_aborted"; reason: string }
@@ -94,15 +91,36 @@ export interface MatchupResult {
   games: GameResult[];
 }
 
+export type TurnActionType =
+  | "action"       // Main action (attack, cast_spell, use_item, defend, wait, dash, etc.)
+  | "move"          // Movement resolved
+  | "reaction"      // Reaction triggered (opportunity attack, counterspell)
+  | "bonus_action"  // Bonus action (action surge extra action, off-hand attack, etc.)
+  | "status"        // Status effect tick / aura damage
+  | "death_save";    // Death saving throw
+
 export interface GameTurnLog {
   turnNumber: number;
   actorId: string;
   actorName: string;
+  /** Kind of action: action, move, reaction, bonus_action, status, death_save */
+  actionType: TurnActionType;
   narrative: string;
   hpA: number;
   hpB: number;
   maxHpA: number;
   maxHpB: number;
+  badAction?: string;
+  // Structured mechanics data from CombatResult
+  attackRoll?: number;
+  attackTotal?: number;
+  targetAc?: number;
+  saveRoll?: number;
+  saveDc?: number;
+  saveSuccess?: boolean;
+  damageRolls?: number[];
+  wasCrit?: boolean;
+  damageTotal?: number;
 }
 
 export interface GameResult {
@@ -119,6 +137,8 @@ export interface GameResult {
   turnLog?: GameTurnLog[];
   error?: string;
   durationMs?: number;
+  /** How the game ended (e.g. "Turn limit reached", "Character defeated", etc.) */
+  endReason?: string;
 }
 
 export interface GameModelStats {
@@ -142,10 +162,8 @@ export class TournamentRunner {
     this.config = { ...DEFAULT_CONFIG, ...config } as TournamentConfig;
     for (const model of this.config.models) {
       const initElo = this.config.initialElos?.[model] ?? 1000;
-      this.modelStats.set(model, createModelStats(model, initElo, false));
-    }
-    if (this.config.includeHeuristic) {
-      this.modelStats.set(HEURISTIC_BASELINE, createModelStats(HEURISTIC_BASELINE, 1000, true));
+      const isH = model === HEURISTIC_BASELINE;
+      this.modelStats.set(model, createModelStats(model, initElo, isH));
     }
   }
 
@@ -171,9 +189,7 @@ export class TournamentRunner {
   }
 
   private getParticipants(): string[] {
-    const parts = [...this.config.models];
-    if (this.config.includeHeuristic) parts.push(HEURISTIC_BASELINE);
-    return parts;
+    return [...this.config.models];
   }
 
   /** Run the full round-robin tournament */
@@ -295,34 +311,79 @@ export class TournamentRunner {
     const gameStartTime = Date.now();
     const idA = "unit1";
     const idB = "unit2";
-    const charA = createCharacter(idA, "Alpha", classA as any, undefined, "red");
-    const charB = createCharacter(idB, "Beta", classB as any, undefined, "blue");
+    const charA = createCharacter(idA, modelA, classA as any, undefined, "red");
+    const charB = createCharacter(idB, modelB, classB as any, undefined, "blue");
 
     const tracking = {
       A: { toolCalls: 0, badActions: 0, turns: 0 },
       B: { toolCalls: 0, badActions: 0, turns: 0 },
     };
 
-    const agentA = this.createAgent(modelA, idA, "Alpha", classA);
-    const agentB = this.createAgent(modelB, idB, "Beta", classB);
+    const agentA = this.createAgent(modelA, idA, modelA, classA);
+    const agentB = this.createAgent(modelB, idB, modelB, classB);
 
-    let currentTurnNum = 0;
+    let roundNumber = 0;
+    let endReason = "";
+    const emitTurn = (narrative: string, actionType: TurnActionType, extra?: Partial<TournamentEvent & { type: "turn" }>) => {
+      this.emit({
+        type: "turn",
+        gameNum: gameNumber,
+        narrative,
+        turnNumber: roundNumber,
+        actionType,
+        hpA: charA.stats.hp, hpB: charB.stats.hp,
+        maxHpA: charA.stats.maxHp, maxHpB: charB.stats.maxHp,
+        ...extra,
+      });
+    };
     const eventHandler: BattleEventHandler = (event: BattleEvent) => {
+      // Track round number from turn_start
+      if (event.type === "turn_start") {
+        roundNumber = event.turnNumber;
+      }
       if (event.type === "action_chosen") {
         const key = event.actorId === idA ? "A" : "B";
         tracking[key].turns++;
-        currentTurnNum++;
+      }
+      // Forward movement
+      if (event.type === "move") {
+        const actorName = event.actorId === idA ? modelA : modelB;
+        emitTurn(
+          `🏃 ${actorName} moves ${event.distance.toFixed(1)}ft`,
+          "move",
+        );
       }
       // Forward action narratives to tournament subscribers
       if (event.type === "action_result" && event.result.narrative) {
-        this.emit({
-          type: "turn",
-          gameNum: gameNumber,
-          narrative: event.result.narrative,
-          turnNumber: currentTurnNum,
-          hpA: charA.stats.hp, hpB: charB.stats.hp,
-          maxHpA: charA.stats.maxHp, maxHpB: charB.stats.maxHp,
+        const dmg = event.result.damage;
+        const isReaction = !!event.result.reaction;
+        const isBonusAction = event.result.action.type === "class_ability" && event.result.action.abilityId === "action_surge";
+        // Spirit Guardians / aura damage → status
+        const isStatusAura = event.result.action.type === "cast_spell" && event.result.action.spellId === "spirit_guardians";
+        let actionType: TurnActionType = "action";
+        if (isReaction) actionType = "reaction";
+        else if (isBonusAction) actionType = "bonus_action";
+        else if (isStatusAura) actionType = "status";
+        emitTurn(event.result.narrative, actionType, {
+          badAction: event.result.badAction,
+          attackRoll: dmg?.attackRoll,
+          attackTotal: dmg?.attackTotal,
+          targetAc: dmg?.targetAc,
+          saveRoll: dmg?.saveRoll,
+          saveDc: dmg?.saveDc,
+          saveSuccess: dmg?.saveSuccess,
+          damageRolls: dmg?.damageRolls,
+          wasCrit: dmg?.wasCrit,
+          damageTotal: dmg?.damage,
         });
+      }
+      // Forward death saves
+      if (event.type === "death_save") {
+        const actorName = event.characterId === idA ? modelA : modelB;
+        emitTurn(event.narrative, "death_save");
+      }
+      if (event.type === "battle_end") {
+        endReason = event.reason;
       }
     };
 
@@ -342,7 +403,7 @@ export class TournamentRunner {
         }
       }
       for (const result of turn.results) {
-        if (isBadAction(result.narrative ?? "")) tracking[key].badActions++;
+        if (result.badAction) tracking[key].badActions++;
       }
     }
 
@@ -362,18 +423,45 @@ export class TournamentRunner {
     for (const turn of log.turns) {
       const snapA = turn.stateSnapshot.characters.find(c => c.id === idA);
       const snapB = turn.stateSnapshot.characters.find(c => c.id === idB);
+      const actorSnap = turn.actorId === idA ? snapA : snapB;
       for (const result of turn.results) {
-        if (result.narrative) {
-          const actorSnap = turn.actorId === idA ? snapA : snapB;
+        if (!result.narrative) continue;
+        const dmg = result.damage;
+        // Determine action type
+        let actionType: TurnActionType = "action";
+        if (result.reaction) actionType = "reaction";
+        else if (result.action.type === "class_ability" && result.action.abilityId === "action_surge") actionType = "bonus_action";
+        // Emit movement entry before the action that caused it
+        if (result.move) {
           turnLog.push({
             turnNumber: turn.turnNumber,
             actorId: turn.actorId,
             actorName: actorSnap?.name ?? turn.actorId,
-            narrative: result.narrative,
+            actionType: "move",
+            narrative: `🏃 ${actorSnap?.name ?? turn.actorId} moves ${result.move.distanceMoved.toFixed(1)}ft`,
             hpA: snapA?.hp ?? 0, hpB: snapB?.hp ?? 0,
             maxHpA: snapA?.maxHp ?? 1, maxHpB: snapB?.maxHp ?? 1,
           });
         }
+        turnLog.push({
+          turnNumber: turn.turnNumber,
+          actorId: turn.actorId,
+          actorName: actorSnap?.name ?? turn.actorId,
+          actionType,
+          narrative: result.narrative,
+          hpA: snapA?.hp ?? 0, hpB: snapB?.hp ?? 0,
+          maxHpA: snapA?.maxHp ?? 1, maxHpB: snapB?.maxHp ?? 1,
+          badAction: result.badAction,
+          attackRoll: dmg?.attackRoll,
+          attackTotal: dmg?.attackTotal,
+          targetAc: dmg?.targetAc,
+          saveRoll: dmg?.saveRoll,
+          saveDc: dmg?.saveDc,
+          saveSuccess: dmg?.saveSuccess,
+          damageRolls: dmg?.damageRolls,
+          wasCrit: dmg?.wasCrit,
+          damageTotal: dmg?.damage,
+        });
       }
     }
 
@@ -383,6 +471,7 @@ export class TournamentRunner {
       statsA: computeAvg(tracking.A), statsB: computeAvg(tracking.B),
       turnLog,
       durationMs: Date.now() - gameStartTime,
+      endReason: endReason || undefined,
     };
   }
 

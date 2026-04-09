@@ -38,6 +38,32 @@
 
   /* Setup */
   .setup-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}
+  .run-summary{margin-top:16px;padding:16px;background:var(--surface);border:1px solid var(--border);border-radius:8px}
+  .run-summary h3{color:var(--gold);margin-bottom:10px;font-size:15px}
+  .run-summary .run-models{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;min-height:28px}
+  .run-model-tag{display:inline-flex;align-items:center;gap:4px;padding:4px 12px;border-radius:6px;font-size:13px;font-weight:600}
+  .run-model-tag.model-llm{background:rgba(88,166,255,0.15);border:1px solid var(--accent);color:var(--accent)}
+  .run-model-tag.model-heuristic{background:rgba(63,185,80,0.15);border:1px solid var(--green);color:var(--green)}
+  .run-model-tag .remove-model{cursor:pointer;opacity:0.5;margin-left:2px;font-size:11px}
+  .run-model-tag .remove-model:hover{opacity:1}
+  .run-empty{color:var(--dim);font-size:13px;font-style:italic;padding:8px 0}
+  .run-details{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:13px;color:var(--dim)}
+  .run-details span{background:var(--bg);padding:3px 10px;border-radius:4px}
+  .start-action{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .start-action .btn-primary{padding:10px 32px;font-size:16px;font-weight:700;border-radius:8px}
+  /* Duel */
+  .duel-grid{display:grid;grid-template-columns:1fr auto 1fr;gap:16px;margin-top:16px;align-items:start}
+  .duel-card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px;text-align:center}
+  .duel-card h3{color:var(--accent);margin-bottom:10px;font-size:15px}
+  .duel-vs{align-self:center;font-size:28px;font-weight:900;color:var(--dim);padding-top:30px}
+  .duel-card select{width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-size:14px;margin-bottom:8px}
+  .duel-card select:focus{outline:none;border-color:var(--accent)}
+  .duel-footer{margin-top:16px;text-align:center}
+  .duel-footer .btn-primary{padding:12px 48px;font-size:16px;font-weight:700}
+  .duel-model-preview{margin-top:8px;padding:6px 12px;border-radius:6px;font-size:13px;font-weight:600}
+  .duel-model-preview.model-a{background:rgba(88,166,255,0.15);color:var(--accent);border:1px solid var(--accent)}
+  .duel-model-preview.model-b{background:rgba(248,81,73,0.15);color:var(--red);border:1px solid var(--red)}
+  @media(max-width:768px){.duel-grid{grid-template-columns:1fr}.duel-vs{padding-top:0;font-size:20px}}
   .card{background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:16px}
   .card h3{color:var(--accent);margin-bottom:12px;font-size:15px}
   .form-group{margin-bottom:12px}
@@ -103,7 +129,7 @@
   .empty-state{text-align:center;padding:40px 20px;color:var(--dim)}
   .empty-state .icon{font-size:48px;margin-bottom:12px}
 
-  @media(max-width:768px){.setup-grid{grid-template-columns:1fr}.nav{flex-wrap:wrap;padding:8px 12px;gap:4px}.nav h1{font-size:16px;width:100%;text-align:center}.tab{padding:6px 12px;font-size:13px}main{padding:12px}h2{font-size:18px}.settings-grid{grid-template-columns:1fr}}
+  @media(max-width:768px){.setup-grid{grid-template-columns:1fr}.nav{flex-wrap:wrap;padding:8px 12px;gap:4px}.nav h1{font-size:16px;width:100%;text-align:center}.tab{padding:6px 12px;font-size:13px}main{padding:12px}h2{font-size:18px}.settings-grid{grid-template-columns:1fr}.duel-grid{grid-template-columns:1fr}.duel-vs{padding-top:0;font-size:20px}}
   @media print{.nav{display:none!important}body{background:#fff;color:#000}}
 </style>
 </head>
@@ -111,13 +137,13 @@
 <nav class="nav">
   <h1>⚔️ Tournament</h1>
   <div class="tab active" data-panel="setup">Setup</div>
+  <div class="tab" data-panel="duel">⚔️ Duel</div>
   <div class="tab" data-panel="live">Live</div>
   <div class="tab" data-panel="reports">Reports</div>
   <div class="spacer"></div>
   <button class="btn btn-ghost" onclick="toggleTheme()" title="Toggle light/dark theme" id="themeBtn">🌙</button>
   <span id="healthIndicator" style="font-size:12px;padding:4px 8px;border-radius:4px;display:none"></span>
   <button class="btn btn-danger" id="abortBtn" onclick="abortTournament()" style="display:none">⏹ Stop</button>
-  <button class="btn btn-primary" id="startBtn" onclick="startTournament()">🚀 Start</button>
   <button class="btn btn-ghost" onclick="shareUrl()" title="Copy shareable URL">🔗 Share</button>
 </nav>
 
@@ -143,9 +169,7 @@
             <button class="btn btn-ghost" onclick="applyPreset(5,32,30)" style="flex:1">⚔️ Standard (Bo5)</button>
             <button class="btn btn-ghost" onclick="applyPreset(11,24,40)" style="flex:1">🏃 Marathon (Bo11)</button>
           </div>
-          <div style="margin-top:8px">
-            <button class="btn btn-accent" onclick="quickDuel()" style="width:100%">⚔️ Quick Duel — Pick 2 Models & Fight!</button>
-          </div>
+
         </div>
         <div class="form-group">
           <label>Best of (games per matchup)</label>
@@ -161,13 +185,42 @@
         </div>
         <div class="form-group" style="margin-top:8px">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-            <input type="checkbox" id="includeHeuristic" checked>
-            Include 🤖 Heuristic Baseline
           </label>
         </div>
       </div>
     </div>
+    <!-- Run Summary & Start -->
+    <div class="run-summary">
+      <h3>📋 Run Configuration</h3>
+      <div class="run-models" id="runModels"></div>
+      <div class="run-details" id="runDetails"></div>
+      <div class="start-action">
+        <button class="btn btn-primary" id="startBtn" onclick="startTournament()">🚀 Start Tournament</button>
+      </div>
+    </div>
     <div class="error" id="setupError"></div>
+  </div>
+
+  <!-- DUEL PANEL -->
+  <div class="panel" id="panel-duel">
+    <div class="duel-grid">
+      <div class="duel-card">
+        <h3>🔵 Challenger</h3>
+        <select id="duelModelA" onchange="updateDuelPreview()"><option value="">— pick a model —</option></select>
+        <div class="duel-model-preview model-a" id="duelPreviewA"></div>
+      </div>
+      <div class="duel-vs">VS</div>
+      <div class="duel-card">
+        <h3>🔴 Defender</h3>
+        <select id="duelModelB" onchange="updateDuelPreview()"><option value="">— pick a model —</option></select>
+        <div class="duel-model-preview model-b" id="duelPreviewB"></div>
+      </div>
+    </div>
+    <div class="duel-footer">
+      <button class="btn btn-primary" id="duelStartBtn" onclick="startDuel()" disabled>⚔️ Fight!</button>
+      <p style="color:var(--dim);font-size:12px;margin-top:8px">Bo1 • 15 max turns • K=32</p>
+    </div>
+    <div class="error" id="duelError" style="margin-top:8px"></div>
   </div>
 
   <!-- LIVE PANEL -->
@@ -328,8 +381,9 @@ document.querySelectorAll('.tab').forEach(tab => {
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
   if (e.key === '1') switchTab('setup');
-  else if (e.key === '2') switchTab('live');
-  else if (e.key === '3') switchTab('reports');
+  else if (e.key === '2') switchTab('duel');
+  else if (e.key === '3') switchTab('live');
+  else if (e.key === '4') switchTab('reports');
   else if (e.key === 'Escape') {
     const modals = ['gameViewer', 'historyViewer'];
     modals.forEach(id => { const el = document.getElementById(id); if (el) el.style.display = 'none'; });
@@ -379,7 +433,7 @@ function renderBracket() {
       m.games.forEach((g, gi) => {
         const w = g.winner === 'A' ? label(m.modelA) : g.winner === 'B' ? label(m.modelB) : 'Draw';
         const color = g.winner === 'draw' ? 'var(--yellow)' : 'var(--green)';
-        html += '<div style="padding:2px 0;border-bottom:1px solid var(--border)">Game ' + (gi+1) + ': ' + g.classA + ' vs ' + g.classB + ' → <span style="color:' + color + '">' + w + '</span> (' + g.turns + ' turns' + (g.durationMs ? ', ' + (g.durationMs / 1000).toFixed(1) + 's' : '') + ')' + (g.error ? ' <span style="color:var(--red)">⚠️ ' + g.error + '</span>' : '') + '</div>';
+        html += '<div style="padding:2px 0;border-bottom:1px solid var(--border)">Game ' + (gi+1) + ': ' + label(m.modelA) + ' (' + g.classA + ') vs ' + label(m.modelB) + ' (' + g.classB + ') → <span style="color:' + color + '">' + w + '</span> (' + g.turns + ' turns' + (g.durationMs ? ', ' + (g.durationMs / 1000).toFixed(1) + 's' : '') + ')' + (g.error ? ' <span style="color:var(--red)">⚠️ ' + g.error + '</span>' : '') + '</div>';
       });
     } else {
       html += '<div style="color:var(--dim)">No games yet</div>';
@@ -393,6 +447,16 @@ function renderBracket() {
 }
 function label(model) {
   return model === HB ? '🤖 heuristic' : model;
+}
+
+/** Safely get badActions/turns from game stats (may be missing from old data) */
+function gameBadActions(g) {
+  return {
+    badA: g.statsA?.badActions ?? 0,
+    badB: g.statsB?.badActions ?? 0,
+    turnsA: g.statsA?.turns ?? 0,
+    turnsB: g.statsB?.turns ?? 0,
+  };
 }
 
 function shortName(model) {
@@ -409,6 +473,42 @@ function autoScroll() {
   const log = document.getElementById('gameLog');
   const cb = document.getElementById('autoScroll');
   if (log && cb && cb.checked) log.scrollTop = log.scrollHeight;
+}
+
+function mechanicsTag(e) {
+  const parts = [];
+  // Attack roll
+  if (e.attackRoll != null) {
+    const crit = e.wasCrit ? ' <span style="color:var(--yellow)">CRIT!</span>' : '';
+    parts.push('<span style="color:var(--blue,\'#58a6ff\')">⚔️ nat' + e.attackRoll + ' → ' + e.attackTotal + ' vs AC' + e.targetAc + crit + '</span>');
+  }
+  // Save roll
+  if (e.saveRoll != null) {
+    const icon = e.saveSuccess ? '✅' : '❌';
+    parts.push('<span style="color:var(--purple,\'#bc8cff\')">' + icon + ' save nat' + e.saveRoll + ' vs DC' + e.saveDc + '</span>');
+  }
+  // Damage
+  if (e.damageRolls && e.damageRolls.length > 0) {
+    const rolls = e.damageRolls.join('+');
+    parts.push('<span style="color:var(--orange,\'#d29922\')">🎲 ' + rolls + '=' + e.damageTotal + '</span>');
+  }
+  if (parts.length === 0) return '';
+  return ' <span style="font-size:10px">' + parts.join(' ') + '</span>';
+}
+
+/** Action type prefix icon and styling for log lines */
+const ACTION_TYPE_STYLES = {
+  action:       { icon: '⚔️', color: '#58a6ff', bg: 'rgba(88,166,255,0.10)' },
+  move:         { icon: '🏃', color: '#3fb950', bg: 'rgba(63,185,80,0.10)' },
+  reaction:     { icon: '⚡', color: '#d29922', bg: 'rgba(210,153,34,0.10)' },
+  bonus_action: { icon: '✨', color: '#bc8cff', bg: 'rgba(188,140,255,0.10)' },
+  status:       { icon: '🔥', color: '#f0883e', bg: 'rgba(240,136,62,0.10)' },
+  death_save:   { icon: '💀', color: '#f85149', bg: 'rgba(248,81,73,0.10)' },
+};
+
+function actionTypeTag(actionType) {
+  const t = ACTION_TYPE_STYLES[actionType] ?? ACTION_TYPE_STYLES.action;
+  return '<span style="font-size:10px;padding:1px 4px;border-radius:3px;color:' + t.color + ';background:' + t.bg + ';white-space:nowrap">' + t.icon + ' ' + actionType.replace('_', ' ') + '</span>';
 }
 
 function formatElapsed(ms) {
@@ -485,9 +585,18 @@ async function loadModels() {
     document.getElementById('modelChips').innerHTML =
       '<span class="info">LLM endpoint not reachable. Enter model names manually.</span>';
   }
+  populateDuelSelects();
 }
 loadModels();
 loadDashboardStats();
+
+// Wire up run summary to react to setting changes
+document.getElementById('bestOf').addEventListener('input', updateRunSummary);
+document.getElementById('kFactor').addEventListener('input', updateRunSummary);
+document.getElementById('maxTurns').addEventListener('input', updateRunSummary);
+document.getElementById('manualModels').addEventListener('input', updateRunSummary);
+// Initial render
+setTimeout(updateRunSummary, 600);
 
 // ── Health check ──
 async function checkHealth() {
@@ -530,18 +639,68 @@ setInterval(checkHealth, 30000); // check every 30s
   if (kFactor) document.getElementById('kFactor').value = kFactor;
   const maxTurns = params.get('maxTurns');
   if (maxTurns) document.getElementById('maxTurns').value = maxTurns;
-  const heuristic = params.get('heuristic');
-  if (heuristic !== null) document.getElementById('includeHeuristic').checked = heuristic !== 'false';
   // Auto-start if requested
   if (params.get('autoStart') === 'true') {
     setTimeout(() => startTournament(), 500); // Small delay for models to load
   }
+  updateRunSummary();
 })();
 
 function toggleModel(el) {
   const model = el.dataset.model;
   if (selectedModels.has(model)) { selectedModels.delete(model); el.classList.remove('selected'); }
   else { selectedModels.add(model); el.classList.add('selected'); }
+  updateRunSummary();
+}
+
+function refreshModelChips() {
+  document.querySelectorAll('#modelChips .chip').forEach(el => {
+    if (selectedModels.has(el.dataset.model)) el.classList.add('selected');
+    else el.classList.remove('selected');
+  });
+  updateRunSummary();
+}
+
+function removeModelFromRun(model) {
+  selectedModels.delete(model);
+  refreshModelChips();
+}
+
+function updateRunSummary() {
+  const container = document.getElementById('runModels');
+  const detailsEl = document.getElementById('runDetails');
+  if (!container) return;
+
+  const manual = document.getElementById('manualModels').value.trim();
+  const models = manual ? manual.split(',').map(s => s.trim()).filter(Boolean) : [...selectedModels];
+
+  if (models.length === 0) {
+    container.innerHTML = '<div class="run-empty">Click models above or enter names manually to configure your run.</div>';
+  } else {
+    let html = '';
+    models.forEach(m => {
+      const isHb = m === HB;
+      const cls = isHb ? 'model-heuristic' : 'model-llm';
+      const icon = isHb ? '🤖' : '🧠';
+      html += '<span class="run-model-tag ' + cls + '">' + icon + ' ' + m +
+        '<span class="remove-model" onclick="removeModelFromRun(\'' + m.replace(/'/g, "\\'") + '\')" title="Remove">✕</span></span>';
+    });
+    container.innerHTML = html;
+  }
+
+  const bestOf = document.getElementById('bestOf').value;
+  const kFactor = document.getElementById('kFactor').value;
+  const maxTurns = document.getElementById('maxTurns').value;
+  const totalParticipants = models.length;
+  const matchupCount = totalParticipants >= 2 ? (totalParticipants * (totalParticipants - 1)) / 2 : 0;
+  const totalGames = matchupCount * parseInt(bestOf || 1);
+
+  detailsEl.innerHTML =
+    '<span>⏱ Bo' + bestOf + '</span>' +
+    '<span>🎯 K=' + kFactor + '</span>' +
+    '<span>🔄 Max ' + maxTurns + ' turns</span>' +
+    '<span>👥 ' + totalParticipants + ' participants</span>' +
+    (matchupCount > 0 ? '<span>⚔️ ' + matchupCount + ' matchups (' + totalGames + ' games)</span>' : '');
 }
 
 // ── Share URL ──
@@ -557,7 +716,6 @@ function shareUrl() {
     bestOf: document.getElementById('bestOf').value,
     kFactor: document.getElementById('kFactor').value,
     maxTurns: document.getElementById('maxTurns').value,
-    heuristic: document.getElementById('includeHeuristic').checked ? 'true' : 'false',
   });
   const url = window.location.origin + window.location.pathname + '?' + params.toString();
   navigator.clipboard.writeText(url).then(() => {
@@ -567,22 +725,72 @@ function shareUrl() {
 }
 
 // ── Presets ──
-function quickDuel() {
-  // Select first 2 models (or first 2 from available)
-  const models = [...selectedModels];
-  if (models.length < 2) {
-    toast('Select at least 2 models for a duel', 'error');
-    return;
-  }
-  const duel = models.slice(0, 2);
-  selectedModels.clear();
-  duel.forEach(m => selectedModels.add(m));
-  document.getElementById('bestOf').value = '1';
-  document.getElementById('maxTurns').value = '15';
-  document.getElementById('kFactor').value = '32';
-  document.getElementById('includeHeuristic').checked = false;
-  refreshModelChips();
-  startTournament();
+// ── Duel tab logic ──
+function populateDuelSelects() {
+  const selA = document.getElementById('duelModelA');
+  const selB = document.getElementById('duelModelB');
+  if (!selA || !selB) return;
+  const valA = selA.value;
+  const valB = selB.value;
+  const opts = '<option value="">— pick a model —</option>' +
+    availableModels.map(m => '<option value="' + m + '">' + m + '</option>').join('');
+  selA.innerHTML = opts;
+  selB.innerHTML = opts;
+  if (valA) selA.value = valA;
+  if (valB) selB.value = valB;
+  updateDuelPreview();
+}
+
+function updateDuelPreview() {
+  const selA = document.getElementById('duelModelA');
+  const selB = document.getElementById('duelModelB');
+  const prevA = document.getElementById('duelPreviewA');
+  const prevB = document.getElementById('duelPreviewB');
+  const btn = document.getElementById('duelStartBtn');
+  if (!selA || !selB) return;
+
+  const a = selA.value;
+  const b = selB.value;
+  prevA.textContent = a ? '🧠 ' + a : '';
+  prevB.textContent = b ? '🧠 ' + b : '';
+  btn.disabled = !a || !b || a === b;
+}
+
+function startDuel() {
+  const a = document.getElementById('duelModelA').value;
+  const b = document.getElementById('duelModelB').value;
+  const errEl = document.getElementById('duelError');
+  if (!a || !b) { errEl.textContent = 'Pick two models'; return; }
+  if (a === b) { errEl.textContent = 'Pick two different models'; return; }
+  errEl.textContent = '';
+
+  document.getElementById('duelStartBtn').disabled = true;
+
+  fetch('/api/tournament/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      models: [a, b],
+      bestOf: 1,
+      kFactor: 32,
+      maxTurns: 15,
+    }),
+  })
+  .then(resp => resp.json())
+  .then(data => {
+    if (!data.status) {
+      errEl.textContent = data.error || 'Failed to start';
+      document.getElementById('duelStartBtn').disabled = false;
+      return;
+    }
+    switchTab('live');
+    connectSSE();
+    toast('Duel started!', 'success');
+  })
+  .catch(e => {
+    errEl.textContent = e.message;
+    document.getElementById('duelStartBtn').disabled = false;
+  });
 }
 
 async function retryMatchup(matchupIdx) {
@@ -596,7 +804,7 @@ async function retryMatchup(matchupIdx) {
     const data = await resp.json();
     if (resp.ok) {
       toast('Retrying ' + shortName(data.modelA) + ' vs ' + shortName(data.modelB), 'info');
-      switchTab(1); // Switch to Live tab
+      switchTab('live');
     } else {
       toast(data.error || 'Retry failed', 'error');
     }
@@ -609,6 +817,7 @@ function applyPreset(bestOf, kFactor, maxTurns) {
   document.getElementById('bestOf').value = bestOf;
   document.getElementById('kFactor').value = kFactor;
   document.getElementById('maxTurns').value = maxTurns;
+  updateRunSummary();
 }
 
 // ── Start tournament ──
@@ -646,7 +855,6 @@ async function startTournament() {
     bestOf: bestOf || 5,
     kFactor: kFactor || 32,
     maxTurns: maxTurns || 30,
-    includeHeuristic: document.getElementById('includeHeuristic').checked,
   };
 
   document.getElementById('startBtn').disabled = true;
@@ -730,7 +938,7 @@ function handleEvent(event) {
 
     case 'game_start':
       log.innerHTML += '<div class="info">  Game ' + event.gameNum + '/' + event.totalGames +
-        ': ' + event.classA + ' vs ' + event.classB + '</div>';
+        ': ' + label(event.modelA) + ' (' + event.classA + ') vs ' + label(event.modelB) + ' (' + event.classB + ')</div>';
       autoScroll();
       break;
 
@@ -740,8 +948,10 @@ function handleEvent(event) {
         const color = pct > 50 ? '#3fb950' : pct > 25 ? '#d29922' : '#f85149';
         return '<span style="color:' + color + '">' + hp + '/' + max + '</span>';
       };
+      const badTag = event.badAction ? ' <span style="color:var(--red);font-size:10px;background:rgba(248,81,73,0.15);padding:1px 4px;border-radius:3px">⚠️' + event.badAction.replace(/_/g,' ') + '</span>' : '';
       const line = '<span style="color:#484f58">[' + event.turnNumber + ']</span> ' +
-        event.narrative + ' ' +
+        actionTypeTag(event.actionType) + ' ' +
+        event.narrative + badTag + mechanicsTag(event) + ' ' +
         hpBar(event.hpA, event.maxHpA) + ' vs ' + hpBar(event.hpB, event.maxHpB);
       log.innerHTML += '<div class="turn" onclick="copyTurn(this)" title="Click to copy">' + line + '</div>';
       autoScroll();
@@ -756,8 +966,11 @@ function handleEvent(event) {
       const eloDeltaA = event.eloA - (stats[g.modelA]?.prevElo ?? 1000);
       const eloDeltaB = event.eloB - (stats[g.modelB]?.prevElo ?? 1000);
 
+      const { badA, badB } = gameBadActions(g);
+      const badNote = (badA + badB) > 0 ? ' ⚠️' + badA + '/' + badB + ' bad' : '';
+      const reasonNote = g.endReason && g.winner === 'draw' ? ' — ' + g.endReason : '';
       log.innerHTML += '<div class="' + cls + '">  → ' + winnerName + ' in ' + g.turns +
-        ' turns' + (g.durationMs ? ' (' + (g.durationMs / 1000).toFixed(1) + 's)' : '') + ' — ' + label(g.modelA) + ' ' + event.eloA + ' (' + (eloDeltaA >= 0 ? '+' : '') + eloDeltaA + ')' +
+        ' turns' + (g.durationMs ? ' (' + (g.durationMs / 1000).toFixed(1) + 's)' : '') + reasonNote + badNote + ' — ' + label(g.modelA) + ' ' + event.eloA + ' (' + (eloDeltaA >= 0 ? '+' : '') + eloDeltaA + ')' +
         '  ' + label(g.modelB) + ' ' + event.eloB + ' (' + (eloDeltaB >= 0 ? '+' : '') + eloDeltaB + ')</div>';
       autoScroll();
 
@@ -774,10 +987,11 @@ function handleEvent(event) {
       if (g.winner === 'A') { stats[g.modelA].wins++; stats[g.modelB].losses++; }
       else if (g.winner === 'B') { stats[g.modelB].wins++; stats[g.modelA].losses++; }
       else { stats[g.modelA].draws++; stats[g.modelB].draws++; }
-      stats[g.modelA].badActions += g.statsA.badActions;
-      stats[g.modelA].turns += g.statsA.turns;
-      stats[g.modelB].badActions += g.statsB.badActions;
-      stats[g.modelB].turns += g.statsB.turns;
+      const gba = gameBadActions(g);
+      stats[g.modelA].badActions += gba.badA;
+      stats[g.modelA].turns += gba.turnsA;
+      stats[g.modelB].badActions += gba.badB;
+      stats[g.modelB].turns += gba.turnsB;
       recordEloSnapshot();
       updateEloTable();
       updateProgress();
@@ -808,6 +1022,7 @@ function handleEvent(event) {
       document.getElementById('statusText').textContent =
         event.type === 'tournament_aborted' ? 'Tournament aborted' : 'Tournament complete!';
       document.getElementById('startBtn').disabled = false;
+      document.getElementById('duelStartBtn').disabled = false;
       document.getElementById('abortBtn').style.display = 'none';
       document.getElementById('progressBar').style.display = 'none';
       document.getElementById('timerText').style.display = 'none';
@@ -821,7 +1036,9 @@ function handleEvent(event) {
         sorted.forEach((s, i) => {
           const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1);
           const name = s.model;
-          log.innerHTML += '<div style="padding:2px 0">' + medal + ' <strong>' + name + '</strong> — ' + Math.round(s.elo) + ' — ' + s.wins + 'W/' + s.losses + 'L/' + s.draws + 'D</div>';
+          const badPct = s.totalTurns > 0 ? (s.totalBadActions / s.totalTurns * 100).toFixed(1) : '0.0';
+          const badNote = s.totalBadActions > 0 ? ' <span style="color:var(--red);font-size:11px" title="' + s.totalBadActions + ' ineffective actions out of ' + s.totalTurns + ' turns">⚠️' + s.totalBadActions + ' bad (' + badPct + '%)</span>' : ' <span style="color:var(--green);font-size:11px">✓ 0 bad</span>';
+          log.innerHTML += '<div style="padding:2px 0">' + medal + ' <strong>' + name + '</strong> — ' + Math.round(s.elo) + ' — ' + s.wins + 'W/' + s.losses + 'L/' + s.draws + 'D' + badNote + '</div>';
         });
         log.innerHTML += '</div>';
       }
@@ -975,13 +1192,16 @@ async function loadReports() {
       const result = statusData.result;
       window._lastResult = result;
       html += '<h3 style="color:var(--gold);margin-bottom:12px">🏆 Final Rankings</h3>';
-      html += '<table class="elo-table"><thead><tr><th>#</th><th>Model</th><th>ELO</th><th>W/L/D</th><th>Win%</th></tr></thead><tbody>';
+      html += '<table class="elo-table"><thead><tr><th>#</th><th>Model</th><th>ELO</th><th>W/L/D</th><th>Win%</th><th>Bad Acts</th></tr></thead><tbody>';
       result.stats.sort((a, b) => b.elo - a.elo).forEach((s, i) => {
         const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : (i + 1);
         const winPct = s.matchesPlayed > 0 ? (s.wins / s.matchesPlayed * 100).toFixed(0) : '—';
+        const badPct = s.totalTurns > 0 ? (s.totalBadActions / s.totalTurns * 100).toFixed(1) : '0.0';
+        const badColor = s.totalBadActions > 0 ? 'var(--red)' : 'var(--green)';
         const name = s.isHeuristic ? '🤖 heuristic' : s.model;
         html += '<tr><td>' + medal + '</td><td><strong>' + name + '</strong></td><td>' + s.elo +
-          '</td><td>' + s.wins + '/' + s.losses + '/' + s.draws + '</td><td>' + winPct + '%</td></tr>';
+          '</td><td>' + s.wins + '/' + s.losses + '/' + s.draws + '</td><td>' + winPct + '%</td>' +
+          '<td><span style="color:' + badColor + '">' + s.totalBadActions + ' (' + badPct + '%)</span></td></tr>';
       });
       html += '</tbody></table>';
 
@@ -1057,10 +1277,12 @@ async function loadReports() {
         const b = m.modelB === HB ? '🤖 heuristic' : m.modelB;
         m.games.forEach((g, gi) => {
           const winner = g.winner === 'A' ? a : g.winner === 'B' ? b : 'Draw';
+          const { badA, badB } = gameBadActions(g);
+          const badNote = (badA + badB) > 0 ? ' <span style="color:var(--red);font-size:11px" title="' + a + ': ' + badA + ' bad, ' + b + ': ' + badB + ' bad">⚠️' + badA + '/' + badB + '</span>' : '';
           html += '<div class="game-chip" data-mi="' + mi + '" data-gi="' + gi + '" onclick="viewGame(' + mi + ',' + gi + ')">';
           html += '<strong>' + a + ' (' + g.classA + ') vs ' + b + ' (' + g.classB + ')</strong>';
           html += ' <span style="color:var(--dim)">' + g.turns + ' turns</span>';
-          html += ' <span style="color:var(--green)">' + winner + ' won</span>';
+          html += ' <span style="color:var(--green)">' + winner + ' won</span>' + badNote;
           html += '</div>';
         });
       });
@@ -1289,11 +1511,13 @@ function showMatchupDetail(modelA, modelB) {
   mu.games.forEach((g, gi) => {
     const w = g.winner === 'A' ? modelA : g.winner === 'B' ? modelB : 'Draw';
     const color = g.winner === 'draw' ? 'var(--yellow)' : g.winner === 'A' ? 'var(--green)' : 'var(--red)';
+    const { badA, badB } = gameBadActions(g);
+    const badNote = (badA + badB) > 0 ? ' <span style="color:var(--red);font-size:11px">⚠️' + badA + '/' + badB + ' bad</span>' : '';
     html += '<div style="padding:4px 8px;margin:2px 0;border-left:3px solid ' + color + ';background:var(--bg);border-radius:0 4px 4px 0;cursor:pointer" onclick="viewGame(' + muIdx + ',' + gi + ')">';
-    html += '<strong>Game ' + (gi+1) + '</strong>: ' + g.classA + ' vs ' + g.classB + ' → <span style="color:' + color + '">' + w + '</span> (' + g.turns + ' turns' + (g.durationMs ? ', ' + (g.durationMs / 1000).toFixed(1) + 's' : '') + ')' + (g.error ? ' <span style="color:var(--red)">⚠️</span>' : '');
+    html += '<strong>Game ' + (gi+1) + '</strong>: ' + g.classA + ' vs ' + g.classB + ' → <span style="color:' + color + '">' + w + '</span> (' + g.turns + ' turns' + (g.durationMs ? ', ' + (g.durationMs / 1000).toFixed(1) + 's' : '') + ')' + badNote + (g.error ? ' <span style="color:var(--red)">⚠️</span>' : '');
     html += '</div>';
   });
-  html += '<div style="margin-top:8px"><button class="btn btn-ghost" onclick="renderReports()">← Back to all games</button></div>';
+  html += '<div style="margin-top:8px"><button class="btn btn-ghost" onclick="loadReports()">← Back to all games</button></div>';
   html += '</div>';
   container.innerHTML = html;
 }
@@ -1319,8 +1543,10 @@ async function viewGame(matchupIdx, gameIdx) {
     let html = '';
     // Winner banner
     const winner = data.winner === 'A' ? data.modelA : data.winner === 'B' ? data.modelB : 'Draw';
+    const winnerLabel = data.winner === 'draw' ? 'Draw' : winner + ' wins';
+    const reasonTag = data.endReason && data.winner === 'draw' ? '<div style="font-size:12px;color:var(--yellow);margin-top:2px">' + data.endReason + '</div>' : '';
     html += '<div style="text-align:center;padding:8px;margin-bottom:8px;background:var(--surface);border-radius:6px">';
-    html += '<span style="font-size:18px">🏆 ' + winner + ' wins</span>';
+    html += '<span style="font-size:18px">🏆 ' + winnerLabel + '</span>' + reasonTag;
     html += '</div>';
     if (data.turnLog && data.turnLog.length > 0) {
       // Replay controls
@@ -1398,7 +1624,8 @@ function replayStep(dir) {
     html += '<div style="padding:4px 0;border-bottom:1px solid #21262d;' + current + '">';
     html += '<div style="display:flex;align-items:center;gap:8px">';
     html += '<span style="color:var(--dim);font-size:11px;white-space:nowrap;min-width:50px">[' + tt.turnNumber + '] ' + tt.actorName + '</span>';
-    html += '<span style="flex:1">' + tt.narrative + '</span>';
+    const badTag = tt.badAction ? ' <span style="color:var(--red);font-size:10px;background:rgba(248,81,73,0.15);padding:1px 4px;border-radius:3px" title="Ineffective action">⚠️' + tt.badAction.replace(/_/g,' ') + '</span>' : '';
+    html += '<span style="flex:1">' + actionTypeTag(tt.actionType) + ' ' + tt.narrative + badTag + mechanicsTag(tt) + '</span>';
     html += '</div>';
     html += '<div style="margin-top:2px">' + hpBar(tt.hpA, tt.maxHpA, models.a) + hpBar(tt.hpB, tt.maxHpB, models.b) + '</div>';
     html += '</div>';

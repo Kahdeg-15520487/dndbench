@@ -30,7 +30,7 @@ export type StatusEffectType =
   | "invisible" | "prone" | "stunned" | "frightened" | "disengaging"
   | "unconscious" | "stable" | "dead"
   | "poisoned" | "blinded" | "bless" | "bane" | "restrained" | "spirit_guardians"
-  | "grappled" | "mirror_image" | "absorb_elements";
+  | "grappled" | "mirror_image" | "absorb_elements" | "decay";
 
 export interface StatusEffect {
   type: StatusEffectType;
@@ -428,6 +428,8 @@ export interface CombatAction {
   abilityId?: string;
   move?: MoveVector;
   bonusAction?: BonusAction;
+  /** Set when the agent timed out and couldn't decide — resolved as a wasted turn */
+  timedOut?: boolean;
 }
 
 export interface BonusAction {
@@ -482,6 +484,8 @@ export interface CombatResult {
   fled?: boolean; fledSuccessfully?: boolean;
   /** Reaction triggered by this action (e.g. opportunity attack) */
   reaction?: ReactionResult;
+  /** Set when the action was ineffective (out of range, unknown spell, cooldown, etc.) */
+  badAction?: string;
 }
 
 export interface TurnResult {
@@ -527,6 +531,7 @@ export type BattlePhase = "ongoing" | "finished";
 export interface BattleLog {
   turns: TurnResult[]; winner?: string; totalTurns: number;
   startTime: string; endTime?: string; arena: ArenaConfig; diceSeed?: number;
+  endReason?: string;
 }
 
 export interface ToolDefinition {
