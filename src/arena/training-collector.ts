@@ -20,11 +20,6 @@ interface RawTrainingRecord {
   actionWasBad: boolean;
 }
 
-function getAgentType(actorId: string, agents: Array<{ id: string }>): RawTrainingRecord['actorType'] {
-  // We pass actorType from the caller, so this is a fallback
-  return 'heuristic';
-}
-
 export async function collectTrainingData(
   gameId: number,
   log: BattleLog,
@@ -40,7 +35,6 @@ export async function collectTrainingData(
       // CombatResult IS the result (no .result property on it)
       const actionResult = result;
 
-      // Build state snapshot from the turn's state
       let stateSnapshot: object = {};
       if (turn.stateSnapshot) {
         const allChars = turn.stateSnapshot.characters || [];
@@ -82,7 +76,6 @@ export async function collectTrainingData(
         }
       }
 
-      // Extract thinking steps if available
       const thinkingSteps = turn.thinkingSteps?.length
         ? turn.thinkingSteps.map((s: any) => ({
             type: s.type,

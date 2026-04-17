@@ -130,20 +130,15 @@ export class BattleRunner {
   /** Characters (mutable — runner mutates hp/mp/status during battle) */
   getCharacters(): Character[] { return this.characters; }
 
-  /** Living characters only */
-  /** Get living characters (HP > 0, not defeated) */
   getLiving(): Character[] { return this.characters.filter(c => c.stats.hp > 0 && !this.defeatedIds.has(c.id)); }
 
-  /** Agents */
   getAgents(): IAgent[] { return this.agents; }
 
-  /** Run the full battle to completion */
   async run(): Promise<BattleLog> {
     if (this._hasRun) throw new Error("BattleRunner.run() can only be called once per instance");
     this._hasRun = true;
     const snapshot = createSnapshot(this.characters, 0, "ongoing", this.arena);
 
-    // Notify all agents
     for (const agent of this.agents) {
       await agent.onBattleStart?.(snapshot);
     }
@@ -189,7 +184,6 @@ export class BattleRunner {
       });
     }
 
-    // Notify all agents
     for (const agent of this.agents) {
       agent.onBattleEnd?.(this.winner, this.log.turns.at(-1)?.results?.[0]?.narrative || "Battle over");
     }
@@ -248,7 +242,6 @@ export class BattleRunner {
             : `🎲 ${character.name} death save: ${saveResult.roll}`;
       this.emit({ type: "death_save", characterId: character.id, narrative });
 
-      // Check if actually dead now
       if (isDead(character)) {
         this.defeatedIds.add(character.id);
         this.emit({ type: "character_defeated", characterId: character.id });
@@ -272,7 +265,6 @@ export class BattleRunner {
 
       this.emit({ type: "turn_start", turnNumber: this.turnNumber, actorId: character.id });
 
-      // Reset reaction at start of turn
       resetReaction(character);
 
       const snapshot = createSnapshot(
@@ -335,10 +327,8 @@ export class BattleRunner {
         }
       }
 
-      // ── Ask the agent for its action (the core abstraction) ──
       const action = await agent.getAction(snapshot);
 
-      // Collect thinking steps from LLM agents
       let thinkingSteps: ThinkingStep[] | undefined;
       if (agent instanceof LLMAgent) {
         thinkingSteps = agent.consumeThinkingSteps();
@@ -362,17 +352,15 @@ export class BattleRunner {
         });
 
         // ── Check for Attacks of Opportunity ──
-        if (oldPosition) {
-          const enemies = this.getLiving().filter(c => c.team !== character.team);
-          const oppResult = checkOpportunityAttack(character, oldPosition, character.position, enemies, this.dice);
-          if (oppResult) {
-            this.emit({
-              type: "action_result",
-              actorId: oppResult.actorId,
-              targetId: character.id,
-              result: { action: { type: "wait", actorId: oppResult.actorId }, actorId: oppResult.actorId, targetId: character.id, narrative: oppResult.narrative, damage: oppResult.damage, reaction: oppResult },
-            });
-          }
+        const enemies = this.getLiving().filter(c => c.team !== character.team);
+        const oppResult = checkOpportunityAttack(character, oldPosition, character.position, enemies, this.dice);
+        if (oppResult) {
+          this.emit({
+            type: "action_result",
+            actorId: oppResult.actorId,
+            targetId: character.id,
+            result: { action: { type: "wait", actorId: oppResult.actorId }, actorId: oppResult.actorId, targetId: character.id, narrative: oppResult.narrative, damage: oppResult.damage, reaction: oppResult },
+          });
         }
       }
 
@@ -393,7 +381,6 @@ export class BattleRunner {
 
       const result = resolveAction(character, actionTarget, action, this.dice, this.arena, this.characters);
 
-      // Attach move result
       if (moveResult) result.move = moveResult;
 
       this.emit({ type: "action_result", actorId: character.id, targetId: target.id, result });
@@ -412,16 +399,13 @@ export class BattleRunner {
         }
       }
 
-      // Notify actor and target agents
       agent.onActionResult?.(result);
       if (target.id !== character.id) {
         this.agentMap.get(target.id)?.onActionResult?.(result);
       }
 
-      // Tick cooldowns for this character
       tickCooldowns(character);
 
-      // Log the turn
       this.log.turns.push({
         turnNumber: this.turnNumber,
         actorId: character.id,
@@ -430,7 +414,6 @@ export class BattleRunner {
         thinkingSteps,
       });
 
-      // Check for flee
       if (result.fledSuccessfully) {
         this.finished = true;
         this.winner = target.id;
@@ -441,13 +424,11 @@ export class BattleRunner {
         break;
       }
 
-      // Check for defeat
       if (this.checkDefeat(character, target)) break;
 
       // ── Action Surge: grant an extra action ──
       const usedActionSurge = action.type === "class_ability" && action.abilityId === "action_surge";
       if (usedActionSurge && character.stats.hp > 0) {
-        // Get a second action from the agent
         const surgeSnapshot = createSnapshot(
           this.getLiving(),
           this.turnNumber,
@@ -457,7 +438,6 @@ export class BattleRunner {
         const surgeAction = await agent.getAction(surgeSnapshot);
         this.emit({ type: "action_chosen", actorId: character.id, action: surgeAction });
 
-        // Resolve movement for surge action
         let surgeMoveResult: CombatResult["move"];
         if (surgeAction.move) {
           const mv = resolveMove(character, surgeAction.move, this.arena);
@@ -523,28 +503,21 @@ export class BattleRunner {
 
   // ── Target Resolution ───────────────────────────────
 
-  /** Resolve the target of an action, respecting explicit targetId or defaulting */
   private resolveTarget(actor: Character, action: CombatAction): Character {
-    // If action specifies a target, look it up
     if (action.targetId) {
       const target = this.characters.find(c => c.id === action.targetId);
       if (target && target.stats.hp > 0) return target;
     }
 
-    // Fallback: pick first living non-ally (enemy)
     const enemy = this.findEnemy(actor);
     if (enemy) return enemy;
-
-    // No enemies left — self-target (shouldn't happen in normal flow)
     return actor;
   }
 
-  /** Find the nearest living enemy (different team) */
   private findEnemy(character: Character): Character | undefined {
     const enemies = this.getLiving().filter(c => c.team !== character.team);
     if (enemies.length === 0) return undefined;
 
-    // Pick nearest enemy
     let nearest = enemies[0];
     let nearestDist = Infinity;
     for (const e of enemies) {
@@ -562,9 +535,7 @@ export class BattleRunner {
   // ── Defeat Checks ───────────────────────────────────
 
   private checkDefeat(actor: Character, target: Character): boolean {
-    // Check if target dropped to 0 HP
     if (target.stats.hp <= 0 && target.id !== actor.id && !this.defeatedIds.has(target.id)) {
-      // Mark as unconscious instead of immediately dead
       markUnconscious(target);
       this.emit({ type: "character_defeated", characterId: target.id });
       this.defeatedIds.add(target.id);
@@ -575,7 +546,6 @@ export class BattleRunner {
 
   // ── Helpers ─────────────────────────────────────────
 
-  /** Process status effects on ALL living characters once per round */
   private processRoundEndStatusEffects() {
     for (const c of this.getLiving()) {
       const narratives = processStatusEffects(c);
@@ -585,10 +555,8 @@ export class BattleRunner {
     }
   }
 
-  /** Check if battle should end based on conscious characters */
   private checkBattleEnd(): boolean {
-    // In D&D, a battle ends when all enemies are downed (0 HP) or dead
-    // Count only conscious (HP > 0) as truly standing
+    // A battle ends when only one team has conscious (HP > 0) members
     const conscious = this.characters.filter(c => c.stats.hp > 0 && !this.defeatedIds.has(c.id));
 
     if (this.winCondition === "last_unit_standing") {
@@ -628,7 +596,6 @@ export class BattleRunner {
     return false;
   }
 
-  /** Check if anyone died from status effects after round-end tick */
   private checkDefeatAfterStatusTick() {
     for (const c of this.characters) {
       if (c.stats.hp <= 0 && !this.defeatedIds.has(c.id) && !isDying(c) && !isStable(c) && !c.statusEffects.some(e => e.type === "unconscious")) {
@@ -636,7 +603,6 @@ export class BattleRunner {
       }
     }
 
-    // Check if battle ends from death during status tick
     this.checkBattleEnd();
   }
 

@@ -93,33 +93,23 @@ export class LLMAgent implements IAgent {
   /** Maximum seconds to wait for the LLM to commit an action before falling back */
   private static readonly TURN_TIMEOUT_MS = 120_000; // 2 minutes
 
-  /** Resolve a target name to a character snapshot (fuzzy: name, id, or "self") */
   private resolveTarget(nameOrId: string): BattleStateSnapshot["characters"][0] | undefined {
     const all = this.currentSnapshot?.characters ?? [];
     const lower = nameOrId.toLowerCase();
     return all.find(c => c.id === nameOrId || c.name.toLowerCase() === lower) ?? undefined;
   }
 
-  /** Get all combatants except self */
-  private others(): BattleStateSnapshot["characters"][0][] {
-    return (this.currentSnapshot?.characters ?? []).filter(c => c.id !== this.id);
-  }
-
-  // Thinking step collection per turn
   private _pendingThinkingSteps: ThinkingStep[] = [];
   private _pendingBonusAction: CombatAction["bonusAction"] = undefined;
 
-  /** Callback for streaming thinking steps to UI */
   onThinking?: (step: ThinkingStep) => void;
 
-  /** Get and clear accumulated thinking steps for the current turn */
   consumeThinkingSteps(): ThinkingStep[] {
     const steps = this._pendingThinkingSteps;
     this._pendingThinkingSteps = [];
     return steps;
   }
 
-  /** Emit a thinking step to both the UI callback and internal buffer */
   private emitThinking(step: ThinkingStep): void {
     if (!this.turnActive) return;
     this._pendingThinkingSteps.push(step);
@@ -148,9 +138,6 @@ export class LLMAgent implements IAgent {
     const modelId = this.config.model;
     const baseUrl = this.config.baseURL || "https://api.openai.com/v1";
     const apiKey = this.config.apiKey || "no-key";
-
-    // Debug: uncomment to trace LLM config
-    // console.error(`[${this.name}] onBattleStart — ${modelId} @ ${baseUrl}`);
 
     const systemPrompt = this.buildSystemPrompt(me);
     const authStorage = AuthStorage.create();
@@ -267,7 +254,6 @@ export class LLMAgent implements IAgent {
           lastToolSig = sig;
           consecutiveRepeats = 1;
         }
-        // Extract meaningful text from result
         let resultText = event.isError ? "Error" : "";
         if (event.result) {
           try {
@@ -324,7 +310,6 @@ export class LLMAgent implements IAgent {
     this.turnCount++;
     this.currentSnapshot = snapshot;
 
-    // Default fallback
     const defaultAction: CombatAction = {
       type: "attack",
       actorId: this.id,
@@ -408,7 +393,6 @@ export class LLMAgent implements IAgent {
   }
 
   onBattleEnd(_winner: string | undefined, _reason: string): void {
-    // Abort any in-flight prompt and reset turn state
     this.turnActive = false;
     if (this._pendingPrompt) {
       this.session?.abort().catch(() => {});
@@ -433,17 +417,14 @@ export class LLMAgent implements IAgent {
 
   // ── Tool Definitions ────────────────────────────────
 
-  /** Tool error result type */
   private toolError(msg: string) {
     return { content: [{ type: "text" as const, text: msg }], details: {}, isError: true };
   }
 
-  /** Get self character from current snapshot, or return error */
   private getSelf() {
     return this.currentSnapshot?.characters.find((c) => c.id === this.id) ?? null;
   }
 
-  /** Resolve target or return error result */
   private resolveTargetOrError(name: string):
     { error: true; result: ReturnType<LLMAgent["toolError"]> } |
     { error: false; target: NonNullable<ReturnType<LLMAgent["resolveTarget"]>> } {
@@ -858,7 +839,6 @@ export class LLMAgent implements IAgent {
 
   /** Called by action tool execute() — resolves the turn Promise and aborts the session */
   private async commitAction(action: CombatAction) {
-    // Stop emitting thinking immediately
     this.turnActive = false;
 
     // Abort the session — agent.abort() sets a flag that stops the agentic
@@ -869,14 +849,11 @@ export class LLMAgent implements IAgent {
 
     console.error(`[${this.name}] ✓ commitAction: ${action.type}`);
 
-    // Attach pending bonus action if queued
     if (this._pendingBonusAction) {
       action.bonusAction = this._pendingBonusAction;
       this._pendingBonusAction = undefined;
     }
 
-    // Resolve the Promise in getAction() — this unblocks getAction()
-    // which will then await _pendingPrompt to ensure full settlement.
     if (this.actionResolve) {
       const resolve = this.actionResolve;
       this.actionResolve = null;
@@ -894,8 +871,7 @@ export class LLMAgent implements IAgent {
   private buildSystemPrompt(
     me: BattleStateSnapshot["characters"][0],
   ): string {
-    const others = this.others();
-    const opponentList = others.map(c => c.name).join(', ');
+    const opponentList = (this.currentSnapshot?.characters ?? []).filter(c => c.id !== this.id).map(c => c.name).join(', ');
     return `You are an expert RPG battle AI controlling ${me.name} (${this.config.characterClass}).
 Your opponents: ${opponentList}
 

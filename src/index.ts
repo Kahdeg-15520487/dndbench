@@ -331,19 +331,18 @@ async function main() {
 // ── Serve Reports Mode ────────────────────────────────
 
 async function serveReports(opts: CliOptions) {
-  const { startTournamentServer } = await import("./arena/tournament-server.js");
+  // Use the consolidated server
+  const port = opts.serveReportsPort || 8050;
+  process.env.PORT = String(port);
+  process.env.LLM_BASE_URL = process.env.LLM_BASE_URL || "http://localhost:8008/v1";
+  process.env.LLM_API_KEY = process.env.LLM_API_KEY || "no-key";
 
   if (opts.testMode) {
     console.log(chalk.yellow("  ⚠️  Test mode: using heuristic agents (no LLM needed)"));
   }
 
-  await startTournamentServer({
-    port: opts.serveReportsPort,
-    baseURL: process.env.LLM_BASE_URL || "http://localhost:8008/v1",
-    apiKey: process.env.LLM_API_KEY || "no-key",
-    outputDir: opts.tournamentOutputDir,
-    testMode: opts.testMode,
-  });
+  await import("./server.js");
+  console.log(chalk.green(`  Dashboard: http://localhost:${port}`));
 
   console.log(chalk.bold.cyan(`\n⚔️  Tournament Dashboard: http://localhost:${opts.serveReportsPort}\n`));
   console.log(chalk.dim("  Setup tournaments, monitor live, and view reports"));

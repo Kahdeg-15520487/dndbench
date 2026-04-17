@@ -21,7 +21,6 @@ import {
 
 // ── Sentinel ────────────────────────────────────────────
 
-/** Special model name for the heuristic baseline */
 export const HEURISTIC_BASELINE = "heuristic-baseline";
 
 // ── Config ──────────────────────────────────────────────
@@ -103,7 +102,6 @@ export interface GameTurnLog {
   turnNumber: number;
   actorId: string;
   actorName: string;
-  /** Kind of action: action, move, reaction, bonus_action, status, death_save */
   actionType: TurnActionType;
   narrative: string;
   hpA: number;
@@ -167,7 +165,6 @@ export class TournamentRunner {
     }
   }
 
-  /** Subscribe to structured tournament events */
   onEvent(handler: TournamentEventHandler): void {
     this.eventHandlers.push(handler);
   }
@@ -177,7 +174,6 @@ export class TournamentRunner {
     this.aborted = true;
   }
 
-  /** Check if tournament has been aborted */
   get isAborted(): boolean {
     return this.aborted;
   }
@@ -192,7 +188,6 @@ export class TournamentRunner {
     return [...this.config.models];
   }
 
-  /** Run the full round-robin tournament */
   async run(): Promise<TournamentResult> {
     const participants = this.getParticipants();
     const totalMatchups = (participants.length * (participants.length - 1)) / 2;
@@ -261,7 +256,7 @@ export class TournamentRunner {
       try {
         gameResult = await this.runGame(modelA, modelB, classA, classB, game + 1);
       } catch (err: any) {
-        // Game crashed — award win to opponent as default
+        // Game crashed — count as draw
         gameResult = {
           gameNumber: game + 1, modelA, modelB, classA, classB,
           winner: "draw", winningModel: "",
@@ -337,7 +332,6 @@ export class TournamentRunner {
       });
     };
     const eventHandler: BattleEventHandler = (event: BattleEvent) => {
-      // Track round number from turn_start
       if (event.type === "turn_start") {
         roundNumber = event.turnNumber;
       }
@@ -345,7 +339,6 @@ export class TournamentRunner {
         const key = event.actorId === idA ? "A" : "B";
         tracking[key].turns++;
       }
-      // Forward movement
       if (event.type === "move") {
         const actorName = event.actorId === idA ? modelA : modelB;
         emitTurn(
@@ -353,7 +346,6 @@ export class TournamentRunner {
           "move",
         );
       }
-      // Forward action narratives to tournament subscribers
       if (event.type === "action_result" && event.result.narrative) {
         const dmg = event.result.damage;
         const isReaction = !!event.result.reaction;
@@ -377,9 +369,7 @@ export class TournamentRunner {
           damageTotal: dmg?.damage,
         });
       }
-      // Forward death saves
       if (event.type === "death_save") {
-        const actorName = event.characterId === idA ? modelA : modelB;
         emitTurn(event.narrative, "death_save");
       }
       if (event.type === "battle_end") {
@@ -418,7 +408,6 @@ export class TournamentRunner {
       badActionRate: t.turns > 0 ? t.badActions / t.turns : 0,
     });
 
-    // Build simplified turn log from battle log
     const turnLog: GameTurnLog[] = [];
     for (const turn of log.turns) {
       const snapA = turn.stateSnapshot.characters.find(c => c.id === idA);
@@ -427,7 +416,6 @@ export class TournamentRunner {
       for (const result of turn.results) {
         if (!result.narrative) continue;
         const dmg = result.damage;
-        // Determine action type
         let actionType: TurnActionType = "action";
         if (result.reaction) actionType = "reaction";
         else if (result.action.type === "class_ability" && result.action.abilityId === "action_surge") actionType = "bonus_action";
