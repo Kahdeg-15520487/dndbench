@@ -18,6 +18,8 @@ import type { IAgent } from "./agent/index.js";
 import { BattleRunner } from "./arena/battle-runner.js";
 import { createCliRenderer, createCliThinkingHandler, printBattleSummary } from "./arena/cli-renderer.js";
 import { saveReplay } from "./arena/replay.js";
+import { collectTrainingData } from "./arena/training-collector.js";
+import * as db from "./db/index.js";
 import { TournamentRunner } from "./arena/tournament.js";
 import { saveTournamentReport } from "./arena/tournament-report.js";
 import {
@@ -413,6 +415,35 @@ async function runTournament(opts: CliOptions) {
 
 // ── Scenario Battle (generic N-participant) ─────────────
 
+async function saveTrainingFromBattle(log: any, agents: IAgent[], charA?: any, charB?: any) {
+  try {
+    const actorTypes: Record<string, string> = {};
+    for (const agent of agents) {
+    const name = agent.constructor.name;
+    let type = 'heuristic';
+    if (name.includes('LLM')) type = 'llm';
+    else if (name.includes('Human')) type = 'human';
+    else if (name.includes('Boss')) type = 'boss';
+    actorTypes[agent.id] = type;
+    }
+    const chars = log.turns?.[0]?.stateSnapshot?.characters || [];
+    const pA = charA || chars[0];
+    const pB = charB || chars[1];
+    const gameId = await db.saveGame({
+      tournamentId: null, gameIndex: 0,
+      participantA: pA?.name || 'unknown', participantB: pB?.name || 'unknown',
+      classA: pA?.class || 'unknown', classB: pB?.class || 'unknown',
+      winner: log.winner || null, winnerTeam: log.winningTeam || null,
+      totalTurns: log.totalTurns, durationMs: log.endTime ? log.endTime - log.startTime : 0,
+      battleLog: log,
+    });
+    const recordCount = await collectTrainingData(gameId, log, actorTypes);
+    console.log(chalk.dim(`  📊 ${recordCount} training records saved`));
+  } catch (err) {
+    console.error(chalk.yellow('  ⚠️  Could not save training data:'), (err as Error).message);
+  }
+}
+
 async function runScenario(opts: CliOptions) {
   const configs = opts.participants.map(parseParticipantSpec);
 
@@ -484,6 +515,7 @@ async function runScenario(opts: CliOptions) {
 
   const log = await runner.run();
   const replayPath = saveReplay(log, runner.getCharacters(), runner.getAgents());
+  await saveTrainingFromBattle(log, [...agents], undefined, undefined);
 
   if (opts.outputFile) {
     const outPath = path.resolve(opts.outputFile);
@@ -543,6 +575,7 @@ async function runBossExam(opts: CliOptions) {
     results.push({ bossName: bossProfile.name, won, turns: log.totalTurns });
 
     saveReplay(log, runner.getCharacters(), runner.getAgents());
+    await saveTrainingFromBattle(log, [agent1, bossAgent], playerChar, bossChar);
 
     console.log();
     console.log(won
@@ -614,6 +647,7 @@ async function run1v1(opts: CliOptions) {
 
   const log = await runner.run();
   const replayPath = saveReplay(log, runner.getCharacters(), runner.getAgents());
+  await saveTrainingFromBattle(log, [agent1, agent2], char1, char2);
 
   if (opts.outputFile) {
     const outPath = path.resolve(opts.outputFile);
